@@ -1,12 +1,13 @@
 package com.secureguard.mdm.kiosk.vm
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.secureguard.mdm.data.repository.SettingsRepository
 import com.secureguard.mdm.kiosk.manager.KioskLockManager
+import com.secureguard.mdm.screentime.ScreenTimeScheduler
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +26,7 @@ data class KioskManagementState(
 
 @HiltViewModel
 class KioskManagementViewModel @Inject constructor(
-    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
+    @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val kioskLockManager: KioskLockManager
 ) : ViewModel() {
@@ -44,7 +45,7 @@ class KioskManagementViewModel @Inject constructor(
             val isDO = kioskLockManager.isDeviceOwner()
             val isDefault = kioskLockManager.isKioskDefaultLauncher()
             val enabledActions = settingsRepository.getKioskActionButtons()
-            
+
             _uiState.update {
                 it.copy(
                     isLoading = false,
@@ -73,19 +74,15 @@ class KioskManagementViewModel @Inject constructor(
     fun setKioskModeEnabled(enabled: Boolean) {
         viewModelScope.launch {
             if (enabled) {
-                // בעת הפעלה - הגדר את האפליקציות והפיצ'רים המותרים
                 kioskLockManager.setLockTaskPackages()
                 kioskLockManager.enableKioskModeFeatures()
-                
-                // הגדר כאפליקציית בית קבועה (אם Device Owner)
+
                 val includeViewAbsorber = settingsRepository.isKioskAppMonitorEnabled()
                 kioskLockManager.setKioskAsDefaultLauncher(includeViewAbsorber)
             } else {
-                // בעת כיבוי - נקה את ההגדרות
                 kioskLockManager.clearLockTaskPackages()
                 kioskLockManager.disableKioskModeFeatures()
-                
-                // החזרת הלאנצ'ר המקורי כברירת מחדל לפני ביטול הסטטוס
+
                 val originalLauncher = settingsRepository.getChosenHomeLauncherPackage()
                 if (originalLauncher != null) {
                     kioskLockManager.setSpecificAsDefaultLauncher(originalLauncher)
@@ -93,20 +90,17 @@ class KioskManagementViewModel @Inject constructor(
                     kioskLockManager.clearKioskAsDefaultLauncher()
                 }
             }
-            
+
             settingsRepository.setKioskModeEnabled(enabled)
             _uiState.update { it.copy(isKioskModeEnabled = enabled) }
-            
-            // הפעלה חכמה: אם הפעלנו את הקיוסק, נשלח אירוע להפעלת ה-Activity
+
             if (enabled) {
                 launchKiosk()
+                ScreenTimeScheduler(context).start()
             }
         }
     }
 
-    /**
-     * פונקציה לשמירה והחלה מיידית (חזרה לקיוסק אם מופעל)
-     */
     fun saveAndApply(onComplete: () -> Unit) {
         viewModelScope.launch {
             if (uiState.value.isKioskModeEnabled) {
@@ -130,7 +124,6 @@ class KioskManagementViewModel @Inject constructor(
 
             val kioskEnabled = settingsRepository.isKioskModeEnabled()
             if (kioskEnabled) {
-                // עדכן את ה‑persistent preferred activities בהתאם למצב "הגבלה מחמירה"
                 kioskLockManager.setKioskAsDefaultLauncher(enabled)
             }
         }
