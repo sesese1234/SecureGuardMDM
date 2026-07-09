@@ -1,5 +1,1 @@
-עדכון מעבר לקראת עדכון 1.0
-מוסיף חנות אפליקציות ועדכונים, וVPN.
-
-A temporary update before update 1.0
-Adds an App Store and updates, and a VPN Network Management.
+VPN fix - תיקון VPN
