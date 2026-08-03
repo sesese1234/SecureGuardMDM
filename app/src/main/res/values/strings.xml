@@ -55,6 +55,20 @@
     <string name="settings_item_view_blocked_apps">הצג אפליקציות חסומות</string>
     <string name="settings_item_change_default_dialer">שנה אפליקציית טלפון ראשית</string>
     <string name="settings_item_auto_update_check">בדוק עדכונים אוטומטית בכניסה</string>
+    <string name="settings_item_screen_time">הגבלת זמן מסך</string>
+
+    <!-- Screen Time Limit -->
+    <string name="screen_time_title">הגבלת זמן מסך</string>
+    <string name="screen_time_enable_toggle">הפעל הגבלת זמן מסך</string>
+    <string name="screen_time_daily_limit_label">מגבלת דקות יומית לכל אפליקציה</string>
+    <string name="screen_time_allowed_hours_label">שעות שימוש מותרות</string>
+    <string name="screen_time_allowed_hours_from">משעה</string>
+    <string name="screen_time_allowed_hours_to">עד שעה</string>
+    <string name="screen_time_select_apps_label">בחר אפליקציות להגבלה</string>
+    <string name="screen_time_search_apps_hint">חיפוש אפליקציה…</string>
+    <string name="screen_time_usage_access_warning">נדרשת הרשאת \"גישה לנתוני שימוש\" כדי שההגבלה תעבוד</string>
+    <string name="screen_time_usage_access_button">פתח הגדרות הרשאה</string>
+    <string name="screen_time_minutes_suffix">דקות</string>
 
     <!-- Toasts for Call Blocker -->
     <string name="toast_hiding_dialer">מסתיר את אפליקציית הטלפון המקורית (%s)...</string>

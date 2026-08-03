@@ -14,6 +14,7 @@ object SettingsRegistry {
         // קטגוריית ניהול אפליקציות
         NavigateToAppSelectionSetting,
         NavigateToBlockedAppsSetting,
+        NavigateToScreenTimeSetting,
 
         // קטגוריית התאמה אישית והתנהגות
         ToggleUiPositionSetting,

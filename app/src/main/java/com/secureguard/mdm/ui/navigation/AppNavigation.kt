@@ -39,6 +39,7 @@ object Routes {
     const val FRP_SETTINGS = "frp_settings"
     const val KIOSK_MANAGEMENT = "kiosk_management"
     const val KIOSK_APP_SELECTION = "kiosk_app_selection"
+    const val SCREEN_TIME_SETTINGS = "screen_time_settings"
 }
 
 @Composable
@@ -123,6 +124,16 @@ fun AppNavigation(
             composable(Routes.KIOSK_APP_SELECTION) {
                 KioskAppSelectionScreen(
                     onNavigateBack = { navController.popBackStack() }
+                )
+            }
+            composable(Routes.SCREEN_TIME_SETTINGS) {
+                com.secureguard.mdm.screentime.ui.ScreenTimeSettingsScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToProfileEdit = { profileId ->
+                        // Navigate to profile edit screen. Use an empty string for new profile.
+                        val idSegment = profileId ?: ""
+                        navController.navigate("/screentime/edit/$idSegment")
+                    }
                 )
             }
         }

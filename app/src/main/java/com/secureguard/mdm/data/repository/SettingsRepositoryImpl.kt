@@ -3,6 +3,9 @@ package com.secureguard.mdm.data.repository
 import com.secureguard.mdm.data.db.BlockedAppCache
 import com.secureguard.mdm.data.db.BlockedAppCacheDao
 import com.secureguard.mdm.data.local.PreferencesManager
+import com.secureguard.mdm.screentime.ScreenTimeProfile
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -209,7 +212,6 @@ class SettingsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun getKioskActionButtons(): Set<String> = withContext(Dispatchers.IO) {
-        // --- התיקון כאן: שינוי ברירת המחדל לרשימה ריקה ---
         preferencesManager.loadStringSet(PreferencesManager.KEY_KIOSK_ACTION_BAR_ITEMS, emptySet())
     }
 
@@ -256,6 +258,105 @@ class SettingsRepositoryImpl @Inject constructor(
     override suspend fun setKioskAppMonitorEnabled(isEnabled: Boolean) = withContext(Dispatchers.IO) {
         preferencesManager.saveBoolean(PreferencesManager.KEY_KIOSK_APP_MONITOR_ENABLED, isEnabled)
     }
+
+    // --- Screen Time Limit Settings (legacy single global config - kept for migration) ---
+
+    override suspend fun isScreenTimeEnabled(): Boolean = withContext(Dispatchers.IO) {
+        preferencesManager.loadBoolean(PreferencesManager.KEY_SCREEN_TIME_ENABLED, false)
+    }
+
+    override suspend fun setScreenTimeEnabled(isEnabled: Boolean) = withContext(Dispatchers.IO) {
+        preferencesManager.saveBoolean(PreferencesManager.KEY_SCREEN_TIME_ENABLED, isEnabled)
+    }
+
+    override suspend fun getScreenTimeAppPackages(): Set<String> = withContext(Dispatchers.IO) {
+        preferencesManager.loadStringSet(PreferencesManager.KEY_SCREEN_TIME_APP_PACKAGES, emptySet())
+    }
+
+    override suspend fun setScreenTimeAppPackages(packageNames: Set<String>) = withContext(Dispatchers.IO) {
+        preferencesManager.saveStringSet(PreferencesManager.KEY_SCREEN_TIME_APP_PACKAGES, packageNames)
+    }
+
+    override suspend fun getScreenTimeDailyLimitMinutes(): Int = withContext(Dispatchers.IO) {
+        preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_DAILY_LIMIT_MINUTES, 60)
+    }
+
+    override suspend fun setScreenTimeDailyLimitMinutes(minutes: Int) = withContext(Dispatchers.IO) {
+        preferencesManager.saveInt(PreferencesManager.KEY_SCREEN_TIME_DAILY_LIMIT_MINUTES, minutes)
+    }
+
+    override suspend fun getScreenTimeAllowedStartHour(): Int = withContext(Dispatchers.IO) {
+        preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_START_HOUR, 16)
+    }
+
+    override suspend fun getScreenTimeAllowedEndHour(): Int = withContext(Dispatchers.IO) {
+        preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_END_HOUR, 20)
+    }
+
+    override suspend fun setScreenTimeAllowedHours(startHour: Int, endHour: Int) = withContext(Dispatchers.IO) {
+        preferencesManager.saveInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_START_HOUR, startHour)
+        preferencesManager.saveInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_END_HOUR, endHour)
+    }
+
+    override suspend fun getScreenTimeSuspendedPackages(): Set<String> = withContext(Dispatchers.IO) {
+        preferencesManager.loadStringSet(PreferencesManager.KEY_SCREEN_TIME_SUSPENDED_PACKAGES, emptySet())
+    }
+
+    override suspend fun setScreenTimeSuspendedPackages(packageNames: Set<String>) = withContext(Dispatchers.IO) {
+        preferencesManager.saveStringSet(PreferencesManager.KEY_SCREEN_TIME_SUSPENDED_PACKAGES, packageNames)
+    }
+
+    override fun getScreenTimeEnabledFlow(): Flow<Boolean> = preferenceFlow(PreferencesManager.KEY_SCREEN_TIME_ENABLED) {
+        preferencesManager.loadBoolean(PreferencesManager.KEY_SCREEN_TIME_ENABLED, false)
+    }
+
+    // --- Screen Time Profiles (multi-profile support) ---
+
+    private val gson = Gson()
+    private val profileListType = object : TypeToken<List<ScreenTimeProfile>>() {}.type
+
+    /**
+     * טוען את רשימת הפרופילים. אם אין עדיין פרופילים שמורים אך קיימת הגדרה ישנה
+     * (גלובלית, מלפני התמיכה בכמה פרופילים) - ממיר אותה אוטומטית ל"פרופיל 1"
+     * ושומר את התוצאה, כדי שההמרה תתבצע פעם אחת בלבד.
+     */
+    private fun loadProfilesSync(): List<ScreenTimeProfile> {
+        val json = preferencesManager.loadString(PreferencesManager.KEY_SCREEN_TIME_PROFILES, null)
+        if (json != null) {
+            return try {
+                gson.fromJson<List<ScreenTimeProfile>>(json, profileListType) ?: emptyList()
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
+        val legacyPackages = preferencesManager.loadStringSet(PreferencesManager.KEY_SCREEN_TIME_APP_PACKAGES, emptySet())
+        if (legacyPackages.isEmpty()) return emptyList()
+
+        val migrated = listOf(
+            ScreenTimeProfile(
+                name = "פרופיל 1",
+                appPackages = legacyPackages,
+                dailyLimitMinutes = preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_DAILY_LIMIT_MINUTES, 60),
+                allowedStartHour = preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_START_HOUR, 16),
+                allowedEndHour = preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_END_HOUR, 20),
+                isEnabled = true
+            )
+        )
+        preferencesManager.saveString(PreferencesManager.KEY_SCREEN_TIME_PROFILES, gson.toJson(migrated))
+        return migrated
+    }
+
+    override suspend fun getScreenTimeProfiles(): List<ScreenTimeProfile> = withContext(Dispatchers.IO) {
+        loadProfilesSync()
+    }
+
+    override suspend fun setScreenTimeProfiles(profiles: List<ScreenTimeProfile>) = withContext(Dispatchers.IO) {
+        preferencesManager.saveString(PreferencesManager.KEY_SCREEN_TIME_PROFILES, gson.toJson(profiles))
+    }
+
+    override fun getScreenTimeProfilesFlow(): Flow<List<ScreenTimeProfile>> =
+        preferenceFlow(PreferencesManager.KEY_SCREEN_TIME_PROFILES) { loadProfilesSync() }
 
     // --- מימוש Flows לעדכון חי ---
 

@@ -52,5 +52,14 @@ class PreferencesManager @Inject constructor(internal val prefs: SharedPreferenc
         const val KEY_CHOSEN_HOME_LAUNCHER_PKG = "chosen_home_launcher_pkg"
         const val KEY_DONT_SHOW_HOME_CHOICE_AGAIN = "dont_show_home_choice_again"
         const val KEY_KIOSK_APP_MONITOR_ENABLED = "kiosk_app_monitor_enabled"
+
+        // --- Screen Time Limit Keys ---
+        const val KEY_SCREEN_TIME_ENABLED = "screen_time_enabled"
+        const val KEY_SCREEN_TIME_APP_PACKAGES = "screen_time_app_packages"
+        const val KEY_SCREEN_TIME_DAILY_LIMIT_MINUTES = "screen_time_daily_limit_minutes"
+        const val KEY_SCREEN_TIME_ALLOWED_START_HOUR = "screen_time_allowed_start_hour"
+        const val KEY_SCREEN_TIME_ALLOWED_END_HOUR = "screen_time_allowed_end_hour"
+        // רשימת החבילות שהושעו ספציפית ע"י פיצ'ר הגבלת זמן המסך (כדי לא להתנגש עם השעיות של AppBlocker)
+        const val KEY_SCREEN_TIME_SUSPENDED_PACKAGES = "screen_time_suspended_packages"
     }
 }

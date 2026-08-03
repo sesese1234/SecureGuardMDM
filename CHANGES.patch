@@ -1,0 +1,978 @@
+diff --git a/.github/workflows/android.yml b/.github/workflows/android.yml
+index 5db41c3..314991e 100644
+--- a/.github/workflows/android.yml
++++ b/.github/workflows/android.yml
+@@ -28,7 +28,16 @@ jobs:
+         echo "ksp.incremental=false" >> gradle.properties
+ 
+     # התוסף הרשמי של גראדל שמוריד גרסה נקייה ותקינה ועוקף את הקובץ הפגום
++    # gradle-version מוגדר במפורש כדי לעקוף לחלוטין את gradlew (שאיבד את הרשאת ההרצה שלו ב-git)
+     - name: Setup and Run Gradle
+       uses: gradle/actions/setup-gradle@v4
+       with:
++        gradle-version: 8.11.1
+         arguments: assembleDebug --stacktrace
++
++    # מעלה את קובץ ה-APK שנוצר כ-artifact להורדה מעמוד ה-Actions
++    - name: Upload APK
++      uses: actions/upload-artifact@v4
++      with:
++        name: SecureGuardMDM-debug-apk
++        path: app/build/outputs/apk/debug/*.apk
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 29eb35c..ab59692 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -137,6 +137,10 @@
+             android:name=".services.ServiceWatchdogJob"
+             android:permission="android.permission.BIND_JOB_SERVICE" />
+ 
++        <service
++            android:name=".services.ScreenTimeEnforcerJob"
++            android:permission="android.permission.BIND_JOB_SERVICE" />
++
+         <service
+             android:name=".MainService"
+             android:exported="false"
+diff --git a/app/src/main/java/com/secureguard/mdm/boot/impl/ScreenTimeBootTask.kt b/app/src/main/java/com/secureguard/mdm/boot/impl/ScreenTimeBootTask.kt
+new file mode 100644
+index 0000000..5af3b43
+--- /dev/null
++++ b/app/src/main/java/com/secureguard/mdm/boot/impl/ScreenTimeBootTask.kt
+@@ -0,0 +1,23 @@
++package com.secureguard.mdm.boot.impl
++
++import android.content.Context
++import com.secureguard.mdm.boot.api.BootTask
++import com.secureguard.mdm.data.repository.SettingsRepository
++import com.secureguard.mdm.utils.FileLogger
++import com.secureguard.mdm.utils.JobSchedulerHelper
++import dagger.hilt.android.qualifiers.ApplicationContext
++import javax.inject.Inject
++
++class ScreenTimeBootTask @Inject constructor(
++    @ApplicationContext private val context: Context,
++    private val settingsRepository: SettingsRepository
++) : BootTask {
++    override suspend fun onBootCompleted() {
++        if (settingsRepository.isScreenTimeEnabled()) {
++            FileLogger.log("ScreenTimeBootTask", "Screen time limit is enabled. Rescheduling enforcer job.")
++            JobSchedulerHelper.scheduleScreenTimeEnforcer(context)
++        } else {
++            FileLogger.log("ScreenTimeBootTask", "Screen time limit is disabled. Nothing to do.")
++        }
++    }
++}
+diff --git a/app/src/main/java/com/secureguard/mdm/boot/registry/BootTaskRegistry.kt b/app/src/main/java/com/secureguard/mdm/boot/registry/BootTaskRegistry.kt
+index b3a6f1f..4c8ac7f 100644
+--- a/app/src/main/java/com/secureguard/mdm/boot/registry/BootTaskRegistry.kt
++++ b/app/src/main/java/com/secureguard/mdm/boot/registry/BootTaskRegistry.kt
+@@ -2,6 +2,7 @@ package com.secureguard.mdm.boot.registry
+ 
+ import com.secureguard.mdm.boot.api.BootTask
+ import com.secureguard.mdm.boot.impl.NetfreeWatchdogBootTask
++import com.secureguard.mdm.boot.impl.ScreenTimeBootTask
+ import com.secureguard.mdm.boot.impl.ShowToastOnBootTask
+ import javax.inject.Inject
+ import javax.inject.Singleton
+@@ -9,10 +10,12 @@ import javax.inject.Singleton
+ @Singleton
+ class BootTaskRegistry @Inject constructor(
+     showToastOnBootTask: ShowToastOnBootTask,
+-    netfreeWatchdogBootTask: NetfreeWatchdogBootTask
++    netfreeWatchdogBootTask: NetfreeWatchdogBootTask,
++    screenTimeBootTask: ScreenTimeBootTask
+ ) {
+     val allBootTasks: List<BootTask> = listOf(
+         showToastOnBootTask,
+-        netfreeWatchdogBootTask
++        netfreeWatchdogBootTask,
++        screenTimeBootTask
+     )
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/secureguard/mdm/data/local/PreferencesManager.kt b/app/src/main/java/com/secureguard/mdm/data/local/PreferencesManager.kt
+index ccb64e0..79a340d 100644
+--- a/app/src/main/java/com/secureguard/mdm/data/local/PreferencesManager.kt
++++ b/app/src/main/java/com/secureguard/mdm/data/local/PreferencesManager.kt
+@@ -52,5 +52,14 @@ class PreferencesManager @Inject constructor(internal val prefs: SharedPreferenc
+         const val KEY_CHOSEN_HOME_LAUNCHER_PKG = "chosen_home_launcher_pkg"
+         const val KEY_DONT_SHOW_HOME_CHOICE_AGAIN = "dont_show_home_choice_again"
+         const val KEY_KIOSK_APP_MONITOR_ENABLED = "kiosk_app_monitor_enabled"
++
++        // --- Screen Time Limit Keys ---
++        const val KEY_SCREEN_TIME_ENABLED = "screen_time_enabled"
++        const val KEY_SCREEN_TIME_APP_PACKAGES = "screen_time_app_packages"
++        const val KEY_SCREEN_TIME_DAILY_LIMIT_MINUTES = "screen_time_daily_limit_minutes"
++        const val KEY_SCREEN_TIME_ALLOWED_START_HOUR = "screen_time_allowed_start_hour"
++        const val KEY_SCREEN_TIME_ALLOWED_END_HOUR = "screen_time_allowed_end_hour"
++        // רשימת החבילות שהושעו ספציפית ע"י פיצ'ר הגבלת זמן המסך (כדי לא להתנגש עם השעיות של AppBlocker)
++        const val KEY_SCREEN_TIME_SUSPENDED_PACKAGES = "screen_time_suspended_packages"
+     }
+ }
+diff --git a/app/src/main/java/com/secureguard/mdm/data/repository/SettingsRepository.kt b/app/src/main/java/com/secureguard/mdm/data/repository/SettingsRepository.kt
+index 2c9bf8e..21a4bf1 100644
+--- a/app/src/main/java/com/secureguard/mdm/data/repository/SettingsRepository.kt
++++ b/app/src/main/java/com/secureguard/mdm/data/repository/SettingsRepository.kt
+@@ -81,6 +81,20 @@ interface SettingsRepository {
+     suspend fun isKioskAppMonitorEnabled(): Boolean
+     suspend fun setKioskAppMonitorEnabled(isEnabled: Boolean)
+ 
++    // --- Screen Time Limit Settings ---
++    suspend fun isScreenTimeEnabled(): Boolean
++    suspend fun setScreenTimeEnabled(isEnabled: Boolean)
++    suspend fun getScreenTimeAppPackages(): Set<String>
++    suspend fun setScreenTimeAppPackages(packageNames: Set<String>)
++    suspend fun getScreenTimeDailyLimitMinutes(): Int
++    suspend fun setScreenTimeDailyLimitMinutes(minutes: Int)
++    suspend fun getScreenTimeAllowedStartHour(): Int
++    suspend fun getScreenTimeAllowedEndHour(): Int
++    suspend fun setScreenTimeAllowedHours(startHour: Int, endHour: Int)
++    suspend fun getScreenTimeSuspendedPackages(): Set<String>
++    suspend fun setScreenTimeSuspendedPackages(packageNames: Set<String>)
++    fun getScreenTimeEnabledFlow(): Flow<Boolean>
++
+     // --- הוספת זרמים (Flows) לעדכון חי ---
+     fun getKioskEnabledFlow(): Flow<Boolean>
+     fun getKioskAppPackagesFlow(): Flow<Set<String>>
+diff --git a/app/src/main/java/com/secureguard/mdm/data/repository/SettingsRepositoryImpl.kt b/app/src/main/java/com/secureguard/mdm/data/repository/SettingsRepositoryImpl.kt
+index af7c197..567cb23 100644
+--- a/app/src/main/java/com/secureguard/mdm/data/repository/SettingsRepositoryImpl.kt
++++ b/app/src/main/java/com/secureguard/mdm/data/repository/SettingsRepositoryImpl.kt
+@@ -257,6 +257,57 @@ class SettingsRepositoryImpl @Inject constructor(
+         preferencesManager.saveBoolean(PreferencesManager.KEY_KIOSK_APP_MONITOR_ENABLED, isEnabled)
+     }
+ 
++    // --- Screen Time Limit Settings ---
++
++    override suspend fun isScreenTimeEnabled(): Boolean = withContext(Dispatchers.IO) {
++        preferencesManager.loadBoolean(PreferencesManager.KEY_SCREEN_TIME_ENABLED, false)
++    }
++
++    override suspend fun setScreenTimeEnabled(isEnabled: Boolean) = withContext(Dispatchers.IO) {
++        preferencesManager.saveBoolean(PreferencesManager.KEY_SCREEN_TIME_ENABLED, isEnabled)
++    }
++
++    override suspend fun getScreenTimeAppPackages(): Set<String> = withContext(Dispatchers.IO) {
++        preferencesManager.loadStringSet(PreferencesManager.KEY_SCREEN_TIME_APP_PACKAGES, emptySet())
++    }
++
++    override suspend fun setScreenTimeAppPackages(packageNames: Set<String>) = withContext(Dispatchers.IO) {
++        preferencesManager.saveStringSet(PreferencesManager.KEY_SCREEN_TIME_APP_PACKAGES, packageNames)
++    }
++
++    override suspend fun getScreenTimeDailyLimitMinutes(): Int = withContext(Dispatchers.IO) {
++        preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_DAILY_LIMIT_MINUTES, 60)
++    }
++
++    override suspend fun setScreenTimeDailyLimitMinutes(minutes: Int) = withContext(Dispatchers.IO) {
++        preferencesManager.saveInt(PreferencesManager.KEY_SCREEN_TIME_DAILY_LIMIT_MINUTES, minutes)
++    }
++
++    override suspend fun getScreenTimeAllowedStartHour(): Int = withContext(Dispatchers.IO) {
++        preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_START_HOUR, 16)
++    }
++
++    override suspend fun getScreenTimeAllowedEndHour(): Int = withContext(Dispatchers.IO) {
++        preferencesManager.loadInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_END_HOUR, 20)
++    }
++
++    override suspend fun setScreenTimeAllowedHours(startHour: Int, endHour: Int) = withContext(Dispatchers.IO) {
++        preferencesManager.saveInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_START_HOUR, startHour)
++        preferencesManager.saveInt(PreferencesManager.KEY_SCREEN_TIME_ALLOWED_END_HOUR, endHour)
++    }
++
++    override suspend fun getScreenTimeSuspendedPackages(): Set<String> = withContext(Dispatchers.IO) {
++        preferencesManager.loadStringSet(PreferencesManager.KEY_SCREEN_TIME_SUSPENDED_PACKAGES, emptySet())
++    }
++
++    override suspend fun setScreenTimeSuspendedPackages(packageNames: Set<String>) = withContext(Dispatchers.IO) {
++        preferencesManager.saveStringSet(PreferencesManager.KEY_SCREEN_TIME_SUSPENDED_PACKAGES, packageNames)
++    }
++
++    override fun getScreenTimeEnabledFlow(): Flow<Boolean> = preferenceFlow(PreferencesManager.KEY_SCREEN_TIME_ENABLED) {
++        preferencesManager.loadBoolean(PreferencesManager.KEY_SCREEN_TIME_ENABLED, false)
++    }
++
+     // --- מימוש Flows לעדכון חי ---
+ 
+     override fun getKioskEnabledFlow(): Flow<Boolean> = preferenceFlow(PreferencesManager.KEY_KIOSK_MODE_ENABLED) {
+diff --git a/app/src/main/java/com/secureguard/mdm/screentime/ui/ScreenTimeSettingsScreen.kt b/app/src/main/java/com/secureguard/mdm/screentime/ui/ScreenTimeSettingsScreen.kt
+new file mode 100644
+index 0000000..455ab78
+--- /dev/null
++++ b/app/src/main/java/com/secureguard/mdm/screentime/ui/ScreenTimeSettingsScreen.kt
+@@ -0,0 +1,226 @@
++package com.secureguard.mdm.screentime.ui
++
++import android.content.Intent
++import android.provider.Settings
++import androidx.compose.foundation.Image
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.*
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.automirrored.filled.ArrowBack
++import androidx.compose.material3.*
++import androidx.compose.runtime.*
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.hilt.navigation.compose.hiltViewModel
++import com.google.accompanist.drawablepainter.rememberDrawablePainter
++import com.secureguard.mdm.R
++import com.secureguard.mdm.appblocker.AppInfo
++import com.secureguard.mdm.screentime.vm.ScreenTimeSettingsViewModel
++import com.secureguard.mdm.services.ScreenTimeEnforcer
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun ScreenTimeSettingsScreen(
++    viewModel: ScreenTimeSettingsViewModel = hiltViewModel(),
++    onNavigateBack: () -> Unit
++) {
++    val uiState by viewModel.uiState.collectAsState()
++    val context = LocalContext.current
++    val hasUsageAccess = remember { mutableStateOf(ScreenTimeEnforcer.hasUsageAccessPermission(context)) }
++
++    Scaffold(
++        topBar = {
++            TopAppBar(
++                title = { Text(stringResource(id = R.string.screen_time_title)) },
++                navigationIcon = {
++                    IconButton(onClick = onNavigateBack) {
++                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
++                    }
++                }
++            )
++        }
++    ) { padding ->
++        if (uiState.isLoading) {
++            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
++                CircularProgressIndicator()
++            }
++            return@Scaffold
++        }
++
++        LazyColumn(
++            modifier = Modifier
++                .fillMaxSize()
++                .padding(padding)
++                .padding(horizontal = 16.dp),
++            contentPadding = PaddingValues(vertical = 12.dp)
++        ) {
++            item {
++                Row(
++                    modifier = Modifier.fillMaxWidth(),
++                    horizontalArrangement = Arrangement.SpaceBetween,
++                    verticalAlignment = Alignment.CenterVertically
++                ) {
++                    Text(
++                        text = stringResource(id = R.string.screen_time_enable_toggle),
++                        style = MaterialTheme.typography.titleMedium
++                    )
++                    Switch(
++                        checked = uiState.isEnabled,
++                        onCheckedChange = { viewModel.onToggleEnabled(it) }
++                    )
++                }
++                Spacer(modifier = Modifier.height(8.dp))
++            }
++
++            if (!hasUsageAccess.value) {
++                item {
++                    Card(
++                        modifier = Modifier.fillMaxWidth(),
++                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
++                    ) {
++                        Column(modifier = Modifier.padding(12.dp)) {
++                            Text(
++                                text = stringResource(id = R.string.screen_time_usage_access_warning),
++                                color = MaterialTheme.colorScheme.onErrorContainer
++                            )
++                            Spacer(modifier = Modifier.height(8.dp))
++                            Button(onClick = {
++                                context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
++                            }) {
++                                Text(stringResource(id = R.string.screen_time_usage_access_button))
++                            }
++                        }
++                    }
++                    Spacer(modifier = Modifier.height(16.dp))
++                }
++            }
++
++            item {
++                Text(
++                    text = stringResource(id = R.string.screen_time_daily_limit_label),
++                    style = MaterialTheme.typography.titleMedium
++                )
++                Spacer(modifier = Modifier.height(4.dp))
++                Row(verticalAlignment = Alignment.CenterVertically) {
++                    Slider(
++                        value = uiState.dailyLimitMinutes.toFloat(),
++                        onValueChange = { viewModel.onDailyLimitChanged(it.toInt()) },
++                        valueRange = 5f..240f,
++                        steps = 46,
++                        modifier = Modifier.weight(1f)
++                    )
++                    Spacer(modifier = Modifier.width(8.dp))
++                    Text("${uiState.dailyLimitMinutes} ${stringResource(id = R.string.screen_time_minutes_suffix)}")
++                }
++                Spacer(modifier = Modifier.height(16.dp))
++            }
++
++            item {
++                Text(
++                    text = stringResource(id = R.string.screen_time_allowed_hours_label),
++                    style = MaterialTheme.typography.titleMedium
++                )
++                Spacer(modifier = Modifier.height(8.dp))
++                Row(
++                    modifier = Modifier.fillMaxWidth(),
++                    horizontalArrangement = Arrangement.SpaceEvenly
++                ) {
++                    HourPicker(
++                        label = stringResource(id = R.string.screen_time_allowed_hours_from),
++                        hour = uiState.allowedStartHour,
++                        onHourChange = { viewModel.onAllowedHoursChanged(it, uiState.allowedEndHour) }
++                    )
++                    HourPicker(
++                        label = stringResource(id = R.string.screen_time_allowed_hours_to),
++                        hour = uiState.allowedEndHour,
++                        onHourChange = { viewModel.onAllowedHoursChanged(uiState.allowedStartHour, it) }
++                    )
++                }
++                Spacer(modifier = Modifier.height(16.dp))
++            }
++
++            item {
++                Text(
++                    text = stringResource(id = R.string.screen_time_select_apps_label),
++                    style = MaterialTheme.typography.titleMedium
++                )
++                Spacer(modifier = Modifier.height(8.dp))
++                OutlinedTextField(
++                    value = uiState.searchQuery,
++                    onValueChange = { viewModel.onSearchQueryChanged(it) },
++                    placeholder = { Text(stringResource(id = R.string.screen_time_search_apps_hint)) },
++                    modifier = Modifier.fillMaxWidth(),
++                    singleLine = true
++                )
++                Spacer(modifier = Modifier.height(8.dp))
++            }
++
++            items(uiState.filteredApps, key = { it.packageName }) { app ->
++                AppRow(
++                    app = app,
++                    isSelected = uiState.selectedPackages.contains(app.packageName),
++                    onClick = { viewModel.toggleApp(app.packageName) }
++                )
++            }
++
++            item { Spacer(modifier = Modifier.height(24.dp)) }
++        }
++    }
++}
++
++@Composable
++private fun HourPicker(label: String, hour: Int, onHourChange: (Int) -> Unit) {
++    Column(horizontalAlignment = Alignment.CenterHorizontally) {
++        Text(text = label, style = MaterialTheme.typography.labelMedium)
++        Row(verticalAlignment = Alignment.CenterVertically) {
++            IconButton(onClick = { onHourChange(((hour - 1) + 24) % 24) }) {
++                Text("-", style = MaterialTheme.typography.titleLarge)
++            }
++            Text(
++                text = String.format("%02d:00", hour),
++                style = MaterialTheme.typography.titleMedium,
++                modifier = Modifier.width(64.dp),
++                textAlign = androidx.compose.ui.text.style.TextAlign.Center
++            )
++            IconButton(onClick = { onHourChange((hour + 1) % 24) }) {
++                Text("+", style = MaterialTheme.typography.titleLarge)
++            }
++        }
++    }
++}
++
++@Composable
++private fun AppRow(app: AppInfo, isSelected: Boolean, onClick: () -> Unit) {
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clip(RoundedCornerShape(8.dp))
++            .clickable(onClick = onClick)
++            .padding(vertical = 8.dp, horizontal = 4.dp),
++        verticalAlignment = Alignment.CenterVertically
++    ) {
++        Image(
++            painter = rememberDrawablePainter(drawable = app.icon),
++            contentDescription = app.appName,
++            modifier = Modifier
++                .size(40.dp)
++                .clip(RoundedCornerShape(8.dp))
++        )
++        Spacer(modifier = Modifier.width(12.dp))
++        Text(
++            text = app.appName,
++            modifier = Modifier.weight(1f),
++            maxLines = 1,
++            overflow = TextOverflow.Ellipsis
++        )
++        Checkbox(checked = isSelected, onCheckedChange = { onClick() })
++    }
++}
+diff --git a/app/src/main/java/com/secureguard/mdm/screentime/vm/ScreenTimeSettingsViewModel.kt b/app/src/main/java/com/secureguard/mdm/screentime/vm/ScreenTimeSettingsViewModel.kt
+new file mode 100644
+index 0000000..45d674d
+--- /dev/null
++++ b/app/src/main/java/com/secureguard/mdm/screentime/vm/ScreenTimeSettingsViewModel.kt
+@@ -0,0 +1,149 @@
++package com.secureguard.mdm.screentime.vm
++
++import android.content.Context
++import android.content.pm.ApplicationInfo
++import android.content.pm.PackageManager
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.viewModelScope
++import com.secureguard.mdm.appblocker.AppInfo
++import com.secureguard.mdm.data.repository.SettingsRepository
++import dagger.hilt.android.lifecycle.HiltViewModel
++import dagger.hilt.android.qualifiers.ApplicationContext
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.update
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++import javax.inject.Inject
++
++/**
++ * מצב המסך של הגדרות הגבלת זמן המסך.
++ * ההגדרה גלובלית: אותה מגבלת דקות יומית ואותו חלון שעות מותרות
++ * חלים על כל האפליקציות שנבחרו.
++ */
++data class ScreenTimeSettingsState(
++    val isLoading: Boolean = true,
++    val isEnabled: Boolean = false,
++    val allApps: List<AppInfo> = emptyList(),
++    val selectedPackages: Set<String> = emptySet(),
++    val dailyLimitMinutes: Int = 60,
++    val allowedStartHour: Int = 16,
++    val allowedEndHour: Int = 20,
++    val searchQuery: String = ""
++) {
++    val filteredApps: List<AppInfo>
++        get() = if (searchQuery.isBlank()) {
++            allApps
++        } else {
++            allApps.filter { it.appName.contains(searchQuery, ignoreCase = true) }
++        }
++}
++
++@HiltViewModel
++class ScreenTimeSettingsViewModel @Inject constructor(
++    @ApplicationContext private val context: Context,
++    private val settingsRepository: SettingsRepository
++) : ViewModel() {
++
++    private val _uiState = MutableStateFlow(ScreenTimeSettingsState())
++    val uiState = _uiState.asStateFlow()
++
++    init {
++        loadState()
++    }
++
++    private fun loadState() {
++        viewModelScope.launch {
++            val isEnabled = settingsRepository.isScreenTimeEnabled()
++            val selected = settingsRepository.getScreenTimeAppPackages()
++            val minutes = settingsRepository.getScreenTimeDailyLimitMinutes()
++            val startHour = settingsRepository.getScreenTimeAllowedStartHour()
++            val endHour = settingsRepository.getScreenTimeAllowedEndHour()
++            val apps = getInstalledUserApps()
++
++            _uiState.update {
++                it.copy(
++                    isLoading = false,
++                    isEnabled = isEnabled,
++                    allApps = apps,
++                    selectedPackages = selected,
++                    dailyLimitMinutes = minutes,
++                    allowedStartHour = startHour,
++                    allowedEndHour = endHour
++                )
++            }
++        }
++    }
++
++    private suspend fun getInstalledUserApps(): List<AppInfo> = withContext(Dispatchers.IO) {
++        val pm = context.packageManager
++        pm.getInstalledApplications(PackageManager.GET_META_DATA)
++            .filter { appInfo ->
++                appInfo.packageName != context.packageName &&
++                    (appInfo.flags and ApplicationInfo.FLAG_SYSTEM == 0 || pm.getLaunchIntentForPackage(appInfo.packageName) != null)
++            }
++            .map { appInfo ->
++                AppInfo(
++                    appName = appInfo.loadLabel(pm).toString(),
++                    packageName = appInfo.packageName,
++                    icon = appInfo.loadIcon(pm),
++                    isBlocked = false,
++                    isSystemApp = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
++                    isLauncherApp = pm.getLaunchIntentForPackage(appInfo.packageName) != null,
++                    isSuspended = false,
++                    isInstalled = true
++                )
++            }
++            .distinctBy { it.packageName }
++            .sortedBy { it.appName.lowercase() }
++    }
++
++    fun onToggleEnabled(isEnabled: Boolean) {
++        viewModelScope.launch {
++            settingsRepository.setScreenTimeEnabled(isEnabled)
++            _uiState.update { it.copy(isEnabled = isEnabled) }
++            if (isEnabled) {
++                com.secureguard.mdm.utils.JobSchedulerHelper.scheduleScreenTimeEnforcer(context)
++            } else {
++                com.secureguard.mdm.utils.JobSchedulerHelper.cancelScreenTimeEnforcer(context)
++                // כובה - משחררים מיד כל אפליקציה שהושעתה ע"י הפיצ'ר הזה
++                releaseAllScreenTimeSuspensions()
++            }
++        }
++    }
++
++    fun toggleApp(packageName: String) {
++        viewModelScope.launch {
++            val current = _uiState.value.selectedPackages
++            val updated = if (current.contains(packageName)) current - packageName else current + packageName
++            settingsRepository.setScreenTimeAppPackages(updated)
++            _uiState.update { it.copy(selectedPackages = updated) }
++        }
++    }
++
++    fun onDailyLimitChanged(minutes: Int) {
++        viewModelScope.launch {
++            val safeMinutes = minutes.coerceIn(5, 24 * 60)
++            settingsRepository.setScreenTimeDailyLimitMinutes(safeMinutes)
++            _uiState.update { it.copy(dailyLimitMinutes = safeMinutes) }
++        }
++    }
++
++    fun onAllowedHoursChanged(startHour: Int, endHour: Int) {
++        viewModelScope.launch {
++            val safeStart = startHour.coerceIn(0, 23)
++            val safeEnd = endHour.coerceIn(0, 23)
++            settingsRepository.setScreenTimeAllowedHours(safeStart, safeEnd)
++            _uiState.update { it.copy(allowedStartHour = safeStart, allowedEndHour = safeEnd) }
++        }
++    }
++
++    fun onSearchQueryChanged(query: String) {
++        _uiState.update { it.copy(searchQuery = query) }
++    }
++
++    private suspend fun releaseAllScreenTimeSuspensions() {
++        com.secureguard.mdm.services.ScreenTimeEnforcer.releaseAllSuspensions(context, settingsRepository)
++    }
++}
+diff --git a/app/src/main/java/com/secureguard/mdm/services/ScreenTimeEnforcer.kt b/app/src/main/java/com/secureguard/mdm/services/ScreenTimeEnforcer.kt
+new file mode 100644
+index 0000000..6ef154d
+--- /dev/null
++++ b/app/src/main/java/com/secureguard/mdm/services/ScreenTimeEnforcer.kt
+@@ -0,0 +1,183 @@
++package com.secureguard.mdm.services
++
++import android.app.AppOpsManager
++import android.app.admin.DevicePolicyManager
++import android.app.usage.UsageStatsManager
++import android.content.Context
++import android.os.Build
++import android.os.Process
++import com.secureguard.mdm.SecureGuardDeviceAdminReceiver
++import com.secureguard.mdm.data.repository.SettingsRepository
++import com.secureguard.mdm.utils.FileLogger
++import java.util.Calendar
++import java.util.concurrent.TimeUnit
++
++/**
++ * הלוגיקה המרכזית של הגבלת זמן המסך.
++ * מריץ בדיקה: לכל אפליקציה שנבחרה, בודק אם היא בתוך חלון השעות המותרות
++ * וגם לא חרגה ממכסת הדקות היומית (על סמך UsageStatsManager של המערכת).
++ * אם לא - האפליקציה מושעית (Suspended) עד שהיא חוזרת להיות תקינה.
++ */
++object ScreenTimeEnforcer {
++
++    private const val TAG = "ScreenTimeEnforcer"
++
++    /** בודק אם למשתמש/אפליקציה יש הרשאת "Usage Access" (נדרשת ידנית מהמשתמש). */
++    fun hasUsageAccessPermission(context: Context): Boolean {
++        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
++        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++            appOps.unsafeCheckOpNoThrow(
++                AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName
++            )
++        } else {
++            @Suppress("DEPRECATION")
++            appOps.checkOpNoThrow(
++                AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName
++            )
++        }
++        return mode == AppOpsManager.MODE_ALLOWED
++    }
++
++    /**
++     * מריץ מחזור בדיקה אחד: קורא הגדרות, בודק חריגות, ומשעה/משחרר אפליקציות בהתאם.
++     */
++    suspend fun runEnforcementCycle(context: Context, settingsRepository: SettingsRepository) {
++        if (!settingsRepository.isScreenTimeEnabled()) {
++            releaseAllSuspensions(context, settingsRepository)
++            return
++        }
++
++        if (!hasUsageAccessPermission(context)) {
++            FileLogger.log(TAG, "Missing Usage Access permission. Cannot enforce screen time limits.")
++            return
++        }
++
++        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
++        val admin = SecureGuardDeviceAdminReceiver.getComponentName(context)
++        if (!dpm.isDeviceOwnerApp(context.packageName)) {
++            FileLogger.log(TAG, "App is not Device Owner. Cannot suspend apps.")
++            return
++        }
++
++        val selectedPackages = settingsRepository.getScreenTimeAppPackages()
++        val dailyLimitMinutes = settingsRepository.getScreenTimeDailyLimitMinutes()
++        val startHour = settingsRepository.getScreenTimeAllowedStartHour()
++        val endHour = settingsRepository.getScreenTimeAllowedEndHour()
++        val previouslySuspended = settingsRepository.getScreenTimeSuspendedPackages()
++
++        val usageByPackage = getTodayUsageMinutes(context, selectedPackages)
++        val nowInsideWindow = isCurrentHourInAllowedWindow(startHour, endHour)
++
++        val stillSuspended = mutableSetOf<String>()
++
++        for (packageName in selectedPackages) {
++            val usedMinutes = usageByPackage[packageName] ?: 0L
++            val overDailyLimit = usedMinutes >= dailyLimitMinutes
++            val shouldBeSuspended = overDailyLimit || !nowInsideWindow
++
++            if (shouldBeSuspended) {
++                if (!isPackageSuspended(dpm, admin, packageName)) {
++                    trySetSuspended(dpm, admin, packageName, true)
++                    FileLogger.log(
++                        TAG,
++                        "Suspended $packageName (usedMinutes=$usedMinutes, limit=$dailyLimitMinutes, inWindow=$nowInsideWindow)"
++                    )
++                }
++                stillSuspended.add(packageName)
++            } else if (previouslySuspended.contains(packageName)) {
++                // היה מושעה קודם ע"י הפיצ'ר הזה, וכעת מותר להשתמש בו - לשחרר.
++                trySetSuspended(dpm, admin, packageName, false)
++                FileLogger.log(TAG, "Released $packageName (back within limit/window)")
++            }
++        }
++
++        // ניקוי: אפליקציות שהוסרו מהרשימה הנבחרת אך עדיין רשומות כמושעות ע"י הפיצ'ר
++        val removedFromSelection = previouslySuspended - selectedPackages
++        removedFromSelection.forEach { packageName ->
++            trySetSuspended(dpm, admin, packageName, false)
++            FileLogger.log(TAG, "Released $packageName (removed from screen-time selection)")
++        }
++
++        settingsRepository.setScreenTimeSuspendedPackages(stillSuspended)
++    }
++
++    /** משחרר את כל האפליקציות שהושעו ע"י פיצ'ר זה (למשל כשהמשתמש מכבה את הפיצ'ר). */
++    suspend fun releaseAllSuspensions(context: Context, settingsRepository: SettingsRepository) {
++        val suspended = settingsRepository.getScreenTimeSuspendedPackages()
++        if (suspended.isEmpty()) return
++
++        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
++        if (!dpm.isDeviceOwnerApp(context.packageName)) return
++        val admin = SecureGuardDeviceAdminReceiver.getComponentName(context)
++
++        suspended.forEach { packageName -> trySetSuspended(dpm, admin, packageName, false) }
++        settingsRepository.setScreenTimeSuspendedPackages(emptySet())
++        FileLogger.log(TAG, "Released all screen-time suspensions.")
++    }
++
++    private fun trySetSuspended(
++        dpm: DevicePolicyManager,
++        admin: android.content.ComponentName,
++        packageName: String,
++        suspended: Boolean
++    ) {
++        try {
++            dpm.setPackagesSuspended(admin, arrayOf(packageName), suspended)
++        } catch (e: Exception) {
++            FileLogger.log(TAG, "Failed to set suspended=$suspended for $packageName: ${e.message}")
++        }
++    }
++
++    private fun isPackageSuspended(
++        dpm: DevicePolicyManager,
++        admin: android.content.ComponentName,
++        packageName: String
++    ): Boolean {
++        return try {
++            dpm.isPackageSuspended(admin, packageName)
++        } catch (e: Exception) {
++            false
++        }
++    }
++
++    /** true אם השעה הנוכחית בטווח המותר. תומך גם בטווח שחוצה חצות (למשל 22 -> 06). */
++    private fun isCurrentHourInAllowedWindow(startHour: Int, endHour: Int): Boolean {
++        val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
++        return if (startHour == endHour) {
++            true // טווח לא הוגדר בפועל (0 שעות) - לא מגביל לפי שעה
++        } else if (startHour < endHour) {
++            currentHour in startHour until endHour
++        } else {
++            // טווח שחוצה חצות, למשל 22:00 - 06:00
++            currentHour >= startHour || currentHour < endHour
++        }
++    }
++
++    /** מחזיר מפה של package -> דקות שימוש היום (מתחילת היום ועד עכשיו), לפי UsageStatsManager. */
++    private fun getTodayUsageMinutes(context: Context, packages: Set<String>): Map<String, Long> {
++        if (packages.isEmpty()) return emptyMap()
++
++        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
++        val calendar = Calendar.getInstance().apply {
++            set(Calendar.HOUR_OF_DAY, 0)
++            set(Calendar.MINUTE, 0)
++            set(Calendar.SECOND, 0)
++            set(Calendar.MILLISECOND, 0)
++        }
++        val startOfDay = calendar.timeInMillis
++        val now = System.currentTimeMillis()
++
++        return try {
++            val statsList = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startOfDay, now)
++            statsList
++                .filter { packages.contains(it.packageName) }
++                .groupBy { it.packageName }
++                .mapValues { (_, stats) ->
++                    TimeUnit.MILLISECONDS.toMinutes(stats.sumOf { it.totalTimeInForeground })
++                }
++        } catch (e: Exception) {
++            FileLogger.log(TAG, "Failed to query usage stats: ${e.message}")
++            emptyMap()
++        }
++    }
++}
+diff --git a/app/src/main/java/com/secureguard/mdm/services/ScreenTimeEnforcerJob.kt b/app/src/main/java/com/secureguard/mdm/services/ScreenTimeEnforcerJob.kt
+new file mode 100644
+index 0000000..f19b4ac
+--- /dev/null
++++ b/app/src/main/java/com/secureguard/mdm/services/ScreenTimeEnforcerJob.kt
+@@ -0,0 +1,42 @@
++package com.secureguard.mdm.services
++
++import android.app.job.JobParameters
++import android.app.job.JobService
++import com.secureguard.mdm.data.repository.SettingsRepository
++import com.secureguard.mdm.utils.FileLogger
++import dagger.hilt.android.AndroidEntryPoint
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.launch
++import javax.inject.Inject
++
++/**
++ * JobService המופעל מחדש כל דקה (ראה JobSchedulerHelper) ובודק אם יש
++ * צורך להשעות או לשחרר אפליקציות בהתאם למגבלות הגבלת זמן המסך.
++ */
++@AndroidEntryPoint
++class ScreenTimeEnforcerJob : JobService() {
++
++    @Inject
++    lateinit var settingsRepository: SettingsRepository
++
++    private val jobScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
++
++    override fun onStartJob(params: JobParameters?): Boolean {
++        jobScope.launch {
++            try {
++                ScreenTimeEnforcer.runEnforcementCycle(applicationContext, settingsRepository)
++            } catch (e: Exception) {
++                FileLogger.log("ScreenTimeEnforcerJob", "Error during enforcement cycle: ${e.message}")
++            } finally {
++                jobFinished(params, false)
++            }
++        }
++        return true
++    }
++
++    override fun onStopJob(params: JobParameters?): Boolean {
++        return true
++    }
++}
+diff --git a/app/src/main/java/com/secureguard/mdm/settingsfeatures/impl/AppManagementSettings.kt b/app/src/main/java/com/secureguard/mdm/settingsfeatures/impl/AppManagementSettings.kt
+index e332990..0250d7f 100644
+--- a/app/src/main/java/com/secureguard/mdm/settingsfeatures/impl/AppManagementSettings.kt
++++ b/app/src/main/java/com/secureguard/mdm/settingsfeatures/impl/AppManagementSettings.kt
+@@ -19,4 +19,12 @@ object NavigateToBlockedAppsSetting : NavigationalSetting {
+     override val iconRes: Int = R.drawable.ic_apps_blocked
+     override val category: SettingCategory = SettingCategory.APP_MANAGEMENT
+     override val route: String = Routes.BLOCKED_APPS_DISPLAY
++}
++
++object NavigateToScreenTimeSetting : NavigationalSetting {
++    override val id: String = "navigate_screen_time"
++    override val titleRes: Int = R.string.settings_item_screen_time
++    override val iconRes: Int = R.drawable.ic_screen_time
++    override val category: SettingCategory = SettingCategory.APP_MANAGEMENT
++    override val route: String = Routes.SCREEN_TIME_SETTINGS
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/secureguard/mdm/settingsfeatures/registry/SettingsRegistry.kt b/app/src/main/java/com/secureguard/mdm/settingsfeatures/registry/SettingsRegistry.kt
+index 69c991a..b0d2070 100644
+--- a/app/src/main/java/com/secureguard/mdm/settingsfeatures/registry/SettingsRegistry.kt
++++ b/app/src/main/java/com/secureguard/mdm/settingsfeatures/registry/SettingsRegistry.kt
+@@ -14,6 +14,7 @@ object SettingsRegistry {
+         // קטגוריית ניהול אפליקציות
+         NavigateToAppSelectionSetting,
+         NavigateToBlockedAppsSetting,
++        NavigateToScreenTimeSetting,
+ 
+         // קטגוריית התאמה אישית והתנהגות
+         ToggleUiPositionSetting,
+diff --git a/app/src/main/java/com/secureguard/mdm/ui/navigation/AppNavigation.kt b/app/src/main/java/com/secureguard/mdm/ui/navigation/AppNavigation.kt
+index fc1f929..17f8c07 100644
+--- a/app/src/main/java/com/secureguard/mdm/ui/navigation/AppNavigation.kt
++++ b/app/src/main/java/com/secureguard/mdm/ui/navigation/AppNavigation.kt
+@@ -39,6 +39,7 @@ object Routes {
+     const val FRP_SETTINGS = "frp_settings"
+     const val KIOSK_MANAGEMENT = "kiosk_management"
+     const val KIOSK_APP_SELECTION = "kiosk_app_selection"
++    const val SCREEN_TIME_SETTINGS = "screen_time_settings"
+ }
+ 
+ @Composable
+@@ -125,6 +126,11 @@ fun AppNavigation(
+                     onNavigateBack = { navController.popBackStack() }
+                 )
+             }
++            composable(Routes.SCREEN_TIME_SETTINGS) {
++                com.secureguard.mdm.screentime.ui.ScreenTimeSettingsScreen(
++                    onNavigateBack = { navController.popBackStack() }
++                )
++            }
+         }
+     } else {
+         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+diff --git a/app/src/main/java/com/secureguard/mdm/utils/JobSchedulerHelper.kt b/app/src/main/java/com/secureguard/mdm/utils/JobSchedulerHelper.kt
+index 970ece9..67bc62d 100644
+--- a/app/src/main/java/com/secureguard/mdm/utils/JobSchedulerHelper.kt
++++ b/app/src/main/java/com/secureguard/mdm/utils/JobSchedulerHelper.kt
+@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit
+ 
+ object JobSchedulerHelper {
+     private const val WATCHDOG_JOB_ID = 123
++    private const val SCREEN_TIME_JOB_ID = 124
+     private val REPEAT_INTERVAL = TimeUnit.MINUTES.toMillis(1)
+ 
+     fun scheduleWatchdog(context: Context) {
+@@ -33,4 +34,27 @@ object JobSchedulerHelper {
+         scheduler.cancel(WATCHDOG_JOB_ID)
+         FileLogger.log("JobSchedulerHelper", "Canceled the watchdog job.")
+     }
++
++    fun scheduleScreenTimeEnforcer(context: Context) {
++        val componentName = ComponentName(context, ScreenTimeEnforcerJob::class.java)
++        val jobInfo = JobInfo.Builder(SCREEN_TIME_JOB_ID, componentName)
++            .setPersisted(true)
++            .setPeriodic(REPEAT_INTERVAL)
++            .build()
++
++        val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
++        val resultCode = scheduler.schedule(jobInfo)
++
++        if (resultCode == JobScheduler.RESULT_SUCCESS) {
++            FileLogger.log("JobSchedulerHelper", "Successfully scheduled the screen-time enforcer job.")
++        } else {
++            FileLogger.log("JobSchedulerHelper", "Failed to schedule the screen-time enforcer job. Result code: $resultCode")
++        }
++    }
++
++    fun cancelScreenTimeEnforcer(context: Context) {
++        val scheduler = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
++        scheduler.cancel(SCREEN_TIME_JOB_ID)
++        FileLogger.log("JobSchedulerHelper", "Canceled the screen-time enforcer job.")
++    }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/res/drawable/ic_screen_time.xml b/app/src/main/res/drawable/ic_screen_time.xml
+new file mode 100644
+index 0000000..8dbf94d
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_screen_time.xml
+@@ -0,0 +1,4 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android" android:height="24dp" android:tint="#000000" android:viewportHeight="24" android:viewportWidth="24" android:width="24dp">
++    <path android:fillColor="@android:color/white" android:pathData="M11.99,2C6.47,2 2,6.48 2,12s4.47,10 9.99,10C17.52,22 22,17.52 22,12S17.52,2 11.99,2zM12,20c-4.42,0 -8,-3.58 -8,-8s3.58,-8 8,-8s8,3.58 8,8s-3.58,8 -8,8z"/>
++    <path android:fillColor="@android:color/white" android:pathData="M12.5,7L11,7v6l5.25,3.15l0.75,-1.23l-4.5,-2.67z"/>
++</vector>
+diff --git a/app/src/main/res/values-en/strings.xml b/app/src/main/res/values-en/strings.xml
+index 5868248..6daafb4 100644
+--- a/app/src/main/res/values-en/strings.xml
++++ b/app/src/main/res/values-en/strings.xml
+@@ -55,6 +55,20 @@
+     <string name="settings_item_view_blocked_apps">View Blocked Apps</string>
+     <string name="settings_item_change_default_dialer">Change Default Phone App</string>
+     <string name="settings_item_auto_update_check">Check for Updates Automatically on Launch</string>
++    <string name="settings_item_screen_time">Screen Time Limit</string>
++
++    <!-- Screen Time Limit -->
++    <string name="screen_time_title">Screen Time Limit</string>
++    <string name="screen_time_enable_toggle">Enable Screen Time Limit</string>
++    <string name="screen_time_daily_limit_label">Daily minute limit per app</string>
++    <string name="screen_time_allowed_hours_label">Allowed usage hours</string>
++    <string name="screen_time_allowed_hours_from">From hour</string>
++    <string name="screen_time_allowed_hours_to">To hour</string>
++    <string name="screen_time_select_apps_label">Select apps to limit</string>
++    <string name="screen_time_search_apps_hint">Search app…</string>
++    <string name="screen_time_usage_access_warning">"Usage Access" permission is required for this limit to work</string>
++    <string name="screen_time_usage_access_button">Open permission settings</string>
++    <string name="screen_time_minutes_suffix">minutes</string>
+ 
+     <!-- Toasts for Call Blocker -->
+     <string name="toast_hiding_dialer">Hiding original phone app (%s)...</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 5643743..80c684d 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -55,6 +55,20 @@
+     <string name="settings_item_view_blocked_apps">הצג אפליקציות חסומות</string>
+     <string name="settings_item_change_default_dialer">שנה אפליקציית טלפון ראשית</string>
+     <string name="settings_item_auto_update_check">בדוק עדכונים אוטומטית בכניסה</string>
++    <string name="settings_item_screen_time">הגבלת זמן מסך</string>
++
++    <!-- Screen Time Limit -->
++    <string name="screen_time_title">הגבלת זמן מסך</string>
++    <string name="screen_time_enable_toggle">הפעל הגבלת זמן מסך</string>
++    <string name="screen_time_daily_limit_label">מגבלת דקות יומית לכל אפליקציה</string>
++    <string name="screen_time_allowed_hours_label">שעות שימוש מותרות</string>
++    <string name="screen_time_allowed_hours_from">משעה</string>
++    <string name="screen_time_allowed_hours_to">עד שעה</string>
++    <string name="screen_time_select_apps_label">בחר אפליקציות להגבלה</string>
++    <string name="screen_time_search_apps_hint">חיפוש אפליקציה…</string>
++    <string name="screen_time_usage_access_warning">נדרשת הרשאת \"גישה לנתוני שימוש\" כדי שההגבלה תעבוד</string>
++    <string name="screen_time_usage_access_button">פתח הגדרות הרשאה</string>
++    <string name="screen_time_minutes_suffix">דקות</string>
+ 
+     <!-- Toasts for Call Blocker -->
+     <string name="toast_hiding_dialer">מסתיר את אפליקציית הטלפון המקורית (%s)...</string>
