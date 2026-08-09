@@ -217,6 +217,12 @@ class AstoreDownloader @Inject constructor(
             trySend(AstoreDownloadProgress.Error(lastException?.message ?: "Download failed after $maxRetries attempts"))
         }
 
+        // The work is finished here. Without this close() the flow stayed open on
+        // awaitClose forever, so the collector never returned, the package was never
+        // released from activeInstalls, and every later attempt to update it was
+        // dropped by the in-flight guard — the update just appeared to hang.
+        close()
+
         awaitClose { connections[urlString]?.disconnect() }
     }.flowOn(Dispatchers.IO)
 
@@ -387,6 +393,11 @@ class AstoreDownloader @Inject constructor(
         try {
             val packageInstaller = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            // Without this, Android 12+ answers the commit with STATUS_PENDING_USER_ACTION
+            // instead of installing, which is why single-APK updates never landed.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
             val sessionId = packageInstaller.createSession(params)
             session = packageInstaller.openSession(sessionId)
 

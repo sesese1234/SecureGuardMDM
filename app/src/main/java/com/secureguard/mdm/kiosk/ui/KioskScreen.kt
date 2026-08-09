@@ -366,6 +366,7 @@ private fun KioskBottomBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .navigationBarsPadding()
             .padding(horizontal = 24.dp, vertical = 20.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
@@ -454,41 +455,78 @@ private fun openVolumePanel(context: Context) {
     }
 }
 
+/**
+ * Tracks the torch state in-process.
+ *
+ * The previous implementation persisted the state with Settings.Global.putInt, which
+ * requires WRITE_SECURE_SETTINGS. The write always threw a SecurityException, so the
+ * stored state stayed 0 and every tap re-ran setTorchMode(id, true) — the flashlight
+ * could be switched on but never off. The real state is instead mirrored from the
+ * framework's own torch callback, which also keeps us in sync when something else
+ * (or the camera being opened) turns the torch off.
+ */
 @RequiresApi(Build.VERSION_CODES.M)
-private fun toggleFlashlight(context: Context) {
-    val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
-    if (cameraManager == null) {
-        Log.w(TAG_KIOSK_UI, "CameraManager not available")
-        return
+private object FlashlightController {
+
+    @Volatile
+    private var torchOn: Boolean = false
+    private var registered: Boolean = false
+
+    private val torchCallback = object : CameraManager.TorchCallback() {
+        override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+            if (cameraId == flashCameraId) torchOn = enabled
+        }
+
+        override fun onTorchModeUnavailable(cameraId: String) {
+            if (cameraId == flashCameraId) torchOn = false
+        }
     }
-    try {
-        val cameraId = cameraManager.cameraIdList.firstOrNull()
-        if (cameraId == null) {
-            Log.w(TAG_KIOSK_UI, "No camera ID for flashlight")
+
+    @Volatile
+    private var flashCameraId: String? = null
+
+    /** Returns the first camera that actually reports a flash unit. */
+    private fun resolveFlashCameraId(cameraManager: CameraManager): String? {
+        flashCameraId?.let { return it }
+        val id = cameraManager.cameraIdList.firstOrNull { candidate ->
+            cameraManager.getCameraCharacteristics(candidate)
+                .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+        }
+        flashCameraId = id
+        return id
+    }
+
+    fun toggle(context: Context) {
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+        if (cameraManager == null) {
+            Log.w(TAG_KIOSK_UI, "CameraManager not available")
             return
         }
-        val isEnabled = cameraManager.getCameraCharacteristics(cameraId)
-            .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-        if (!isEnabled) {
-            Log.w(TAG_KIOSK_UI, "Flash not available on this device")
-            return
+        try {
+            val cameraId = resolveFlashCameraId(cameraManager)
+            if (cameraId == null) {
+                Log.w(TAG_KIOSK_UI, "Flash not available on this device")
+                return
+            }
+
+            if (!registered) {
+                // Delivered on the main looper; seeds torchOn with the current state.
+                cameraManager.registerTorchCallback(torchCallback, null)
+                registered = true
+            }
+
+            val newState = !torchOn
+            cameraManager.setTorchMode(cameraId, newState)
+            torchOn = newState
+            Log.d(TAG_KIOSK_UI, "Flashlight toggled to $newState")
+        } catch (e: Exception) {
+            Log.w(TAG_KIOSK_UI, "Failed to toggle flashlight", e)
         }
-        val torchOn = android.provider.Settings.Global.getInt(
-            context.contentResolver,
-            "kiosk_flashlight_state",
-            0
-        ) == 1
-        cameraManager.setTorchMode(cameraId, !torchOn)
-        android.provider.Settings.Global.putInt(
-            context.contentResolver,
-            "kiosk_flashlight_state",
-            if (torchOn) 0 else 1
-        )
-        Log.d(TAG_KIOSK_UI, "Flashlight toggled to ${!torchOn}")
-    } catch (e: Exception) {
-        Log.w(TAG_KIOSK_UI, "Failed to toggle flashlight", e)
     }
 }
+
+@RequiresApi(Build.VERSION_CODES.M)
+private fun toggleFlashlight(context: Context) = FlashlightController.toggle(context)
 
 @Composable
 private fun BottomBarButton(

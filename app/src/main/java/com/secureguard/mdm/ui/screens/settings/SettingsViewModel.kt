@@ -538,28 +538,81 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Clears every user restriction currently set by this admin. Reads the live set from
+     * the framework so restrictions applied by features no longer present in the UI state
+     * are removed too.
+     */
+    private fun clearAllUserRestrictions() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val restrictions = try {
+            dpm.getUserRestrictions(adminComponentName)
+        } catch (e: Exception) {
+            AppLogger.w("SettingsVM", "Could not read user restrictions", e)
+            return
+        }
+        restrictions.keySet().forEach { key ->
+            try {
+                dpm.clearUserRestriction(adminComponentName, key)
+            } catch (e: Exception) {
+                AppLogger.w("SettingsVM", "Could not clear restriction $key", e)
+            }
+        }
+    }
+
     private fun initiateRemoval() {
         viewModelScope.launch {
             try {
-                // Remove all protection features
+                // Remove all protection features. Each one is isolated: a single failing
+                // policy used to abort the whole removal, leaving the device owner in
+                // place with the protections already half torn down.
                 _uiState.value.protectionCategoryToggles.flatMap { it.toggles }.forEach {
-                    it.feature.applyPolicy(context, dpm, adminComponentName, false)
-                    settingsRepository.setFeatureState(it.feature.id, false)
+                    try {
+                        it.feature.applyPolicy(context, dpm, adminComponentName, false)
+                        settingsRepository.setFeatureState(it.feature.id, false)
+                    } catch (e: Exception) {
+                        AppLogger.w("SettingsVM", "Could not clear policy ${it.feature.id}", e)
+                    }
                 }
 
                 // Unhide blocked apps
                 val blockedApps = settingsRepository.getBlockedAppPackages()
                 blockedApps.forEach { packageName ->
-                    dpm.setApplicationHidden(adminComponentName, packageName, false)
+                    try {
+                        dpm.setApplicationHidden(adminComponentName, packageName, false)
+                    } catch (e: Exception) {
+                        AppLogger.w("SettingsVM", "Could not unhide $packageName", e)
+                    }
                 }
                 // Unsuspend apps
                 val suspendedApps = settingsRepository.getSuspendedAppPackages()
-                suspendedApps.forEach { packageName ->
-                    dpm.setPackagesSuspended(adminComponentName, arrayOf(packageName), false)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    suspendedApps.forEach { packageName ->
+                        try {
+                            dpm.setPackagesSuspended(adminComponentName, arrayOf(packageName), false)
+                        } catch (e: Exception) {
+                            AppLogger.w("SettingsVM", "Could not unsuspend $packageName", e)
+                        }
+                    }
                 }
                 settingsRepository.removeAppsFromCache((blockedApps + suspendedApps).toList())
                 settingsRepository.setBlockedAppPackages(emptySet())
                 settingsRepository.setSuspendedAppPackages(emptySet())
+
+                // Drop every remaining user restriction rather than relying on the
+                // feature toggles above having covered them. DISALLOW_UNINSTALL_APPS and
+                // DISALLOW_APPS_CONTROL in particular make the package un-removable, and
+                // once device ownership is gone they can no longer be cleared — which is
+                // exactly how the app ended up stuck on the device with its protections
+                // already disabled.
+                clearAllUserRestrictions()
+
+                // Also make sure nothing still marks this package as protected.
+                try {
+                    dpm.setUninstallBlocked(adminComponentName, context.packageName, false)
+                } catch (e: Exception) {
+                    AppLogger.w("SettingsVM", "Could not clear own uninstall block", e)
+                }
 
                 // Clear device owner (this removes admin privileges)
                 dpm.clearDeviceOwnerApp(context.packageName)

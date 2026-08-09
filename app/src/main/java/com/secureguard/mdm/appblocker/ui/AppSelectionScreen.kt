@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -41,6 +42,8 @@ fun AppSelectionScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showAddPackageDialog by remember { mutableStateOf(false) }
     var showActionChoiceDialog by remember { mutableStateOf<AppInfo?>(null) }
+    // Hoisted so the scroll position survives the list being rebuilt after a save.
+    val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
         viewModel.loadAllData()
@@ -91,17 +94,18 @@ fun AppSelectionScreen(
                     CircularProgressIndicator()
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
                     items(items = uiState.displayedAppsForSelection, key = { it.packageName }) { appInfo ->
                         AppSelectionRow(
                             appInfo = appInfo,
+                            // Ticking a box only stages the change, so many apps can be
+                            // marked in one pass and committed together with Save. Use the
+                            // row itself when you want to suspend instead of block.
                             onCheckedChange = { isChecked ->
-                                // Changes are applied only on save, not immediately
                                 if (isChecked) {
-                                    showActionChoiceDialog = appInfo
+                                    viewModel.onEvent(AppBlockerEvent.OnAppSelectionChanged(appInfo.packageName, true))
                                 } else {
-                                    // For unchecking, we don't immediately apply changes
-                                    // The user must save to apply the deselection
+                                    viewModel.onEvent(AppBlockerEvent.OnAppDeselected(appInfo.packageName))
                                 }
                             },
                             onActionClick = { showActionChoiceDialog = appInfo }
@@ -144,15 +148,15 @@ fun AppSelectionScreen(
         AppSelectionActionChoiceDialog(
             appInfo = appInfo,
             onDismiss = { showActionChoiceDialog = null },
+            // Staged only — saving here reloaded the whole list after every single app,
+            // which is what threw the user back to the top of the list each time.
             onChooseBlock = {
                 showActionChoiceDialog = null
                 viewModel.onEvent(AppBlockerEvent.OnAppSelectionChanged(appInfo.packageName, true))
-                viewModel.onEvent(AppBlockerEvent.OnSaveRequest)
             },
             onChooseSuspend = {
                 showActionChoiceDialog = null
                 viewModel.onEvent(AppBlockerEvent.OnAppSuspensionChanged(appInfo.packageName, true))
-                viewModel.onEvent(AppBlockerEvent.OnSaveRequest)
             }
         )
     }

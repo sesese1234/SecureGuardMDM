@@ -183,7 +183,9 @@ fun AstoreScreen(
             when (selectedTab) {
                 0 -> {
                     // Custom packages tab - show custom packages from settings
-                    val customPackages = uiState.apps.filter { it.isCustomPackage }
+                    // distinctBy guards the LazyColumn key below: a duplicate packageName
+                    // throws rather than rendering, taking the whole store down.
+                    val customPackages = uiState.apps.filter { it.isCustomPackage }.distinctBy { it.packageName }
                     if (customPackages.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -221,7 +223,7 @@ fun AstoreScreen(
                 }
                 1 -> {
                     // Updates tab - only show apps with updates
-                    val appsWithUpdates = uiState.apps.filter { it.updateAvailable }
+                    val appsWithUpdates = uiState.apps.filter { it.updateAvailable }.distinctBy { it.packageName }
                     
                     if (uiState.isCheckingUpdates && appsWithUpdates.isEmpty()) {
                         // Still checking for updates

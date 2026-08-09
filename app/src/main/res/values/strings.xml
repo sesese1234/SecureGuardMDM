@@ -249,7 +249,7 @@
     <string name="update_channel_button">ערוץ עדכון</string>
     <string name="update_settings_title">הגדרות עדכון</string>
     <string name="update_channel_stable">ערוץ יציב</string>
-    <string name="update_channel_PreRelease">ערוץ PreRelease</string>
+    <string name="update_channel_prebuild">ערוץ PreRelease</string>
     <string name="update_channel_explanation_title">הסבר</string>
     <string name="update_channel_explanation_message">מומלץ לבחור בערוץ יציב, אך אם אתה מעונין בפיצ\'רים החדשים מיד שהם יוצאים, אתה יכול לבחור בערוץ הPreRelease.</string>
     <string name="settings_item_frp">הגדר FRP מותאם אישית</string>

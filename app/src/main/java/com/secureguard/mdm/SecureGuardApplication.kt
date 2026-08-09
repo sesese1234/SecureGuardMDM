@@ -1,6 +1,9 @@
 package com.secureguard.mdm
 
+import android.content.ComponentName
+import android.content.pm.PackageManager
 import com.emanuelef.remote_capture.PCAPdroid
+import com.secureguard.mdm.boot.BootCompletedReceiver
 import com.secureguard.mdm.utils.AppLogger
 import dagger.hilt.android.HiltAndroidApp
 import java.security.SecureRandom
@@ -14,6 +17,31 @@ class SecureGuardApplication : PCAPdroid() {
         AppLogger.init(this)
         AppLogger.i("Application", "App started. Logger initialized.")
         setupGlobalSslTrust()
+        ensureBootReceiverEnabled()
+    }
+
+    /**
+     * The receiver ships disabled in the manifest and is switched on when the password is
+     * first created. Installs that never went through that path (upgrades from an older
+     * build) had it left disabled, so no boot task ever ran and nothing was restored after
+     * a reboot. Re-asserting it on every start is idempotent and cheap.
+     */
+    private fun ensureBootReceiverEnabled() {
+        try {
+            val receiver = ComponentName(this, BootCompletedReceiver::class.java)
+            if (packageManager.getComponentEnabledSetting(receiver) !=
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+            ) {
+                packageManager.setComponentEnabledSetting(
+                    receiver,
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP
+                )
+                AppLogger.i("Application", "BootCompletedReceiver enabled.")
+            }
+        } catch (e: Exception) {
+            AppLogger.e("Application", "Failed to enable BootCompletedReceiver: ${e.message}")
+        }
     }
 
     private fun setupGlobalSslTrust() {

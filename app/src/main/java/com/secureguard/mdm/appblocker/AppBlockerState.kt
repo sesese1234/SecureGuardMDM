@@ -24,6 +24,8 @@ sealed class AppBlockerEvent {
     data class OnFilterChanged(val newFilter: AppFilterType) : AppBlockerEvent()
     data class OnAppSelectionChanged(val packageName: String, val isBlocked: Boolean) : AppBlockerEvent()
     data class OnAppSuspensionChanged(val packageName: String, val isSuspended: Boolean) : AppBlockerEvent()
+    /** Clears both the block and the suspend flag for an app (unchecking its row). */
+    data class OnAppDeselected(val packageName: String) : AppBlockerEvent()
     object OnSaveRequest : AppBlockerEvent() // יישמר מיידית
     object OnDismissPasswordPrompt : AppBlockerEvent() // נשאר למקרה שימוש עתידי, לא מזיק
     data class OnAddPackageManually(val packageName: String) : AppBlockerEvent()
