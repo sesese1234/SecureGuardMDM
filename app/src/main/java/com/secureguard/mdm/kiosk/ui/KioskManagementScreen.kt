@@ -4,7 +4,9 @@ import com.secureguard.mdm.ui.theme.SecureGuardTheme
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -70,10 +72,15 @@ fun KioskManagementScreen(
                             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                         }
                     } else {
+                        // The card list is taller than the viewport on shorter screens.
+                        // Without a scroll container, Arrangement.spacedBy has to
+                        // distribute negative free space, which draws the action-button
+                        // toggles stacked on top of each other and out of reach.
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(padding)
+                                .verticalScroll(rememberScrollState())
                                 .padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
@@ -277,7 +284,9 @@ fun KioskManagementScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.weight(1f))
+                            // A weighted spacer cannot be measured inside a scrollable
+                            // Column (its height is unbounded), so use a fixed gap.
+                            Spacer(modifier = Modifier.height(8.dp))
 
                             if (uiState.isKioskModeEnabled) {
                                 Button(

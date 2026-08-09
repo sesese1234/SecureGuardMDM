@@ -148,15 +148,20 @@ class AstoreViewModel @Inject constructor(
                 }
             }
             
-            // Keep custom packages that aren't in appList
+            // Keep custom packages. A custom package that is also installed appears in
+            // both lists; emitting both produced two entries with the same packageName,
+            // and LazyColumn's key = { it.packageName } throws on the duplicate, crashing
+            // the store on open. The custom entry wins so its metadata is preserved.
             val customApps = currentState.apps.filter { it.isCustomPackage }
-            
+            val customPackageNames = customApps.map { it.packageName }.toSet()
+
             currentState.copy(
-                isLoading = false, 
-                isRefreshing = false, 
-                apps = mergedApps + customApps, 
+                isLoading = false,
+                isRefreshing = false,
+                apps = (mergedApps.filter { it.packageName !in customPackageNames } + customApps)
+                    .distinctBy { it.packageName },
                 isCheckingUpdates = true
-            ) 
+            )
         }
         
         // Step 2: Load custom packages first (they should always be visible)
@@ -177,36 +182,41 @@ class AstoreViewModel @Inject constructor(
         
         AppLogger.d(TAG, "Loading ${customPackages.size} custom packages")
         
-        // Get current installed packages to filter out already installed ones
-        val currentApps = _uiState.value.apps.map { it.packageName }.toSet()
-        
-        // Filter custom packages that aren't already installed
-        val packagesToFetch = customPackages.filter { it !in currentApps }
-        
+        // Only skip packages already resolved as custom entries. Filtering against every
+        // known package meant a custom package that happened to be installed was dropped
+        // here and never reached the custom tab, so it could be added but never installed
+        // or updated from it.
+        val alreadyResolved = _uiState.value.apps
+            .filter { it.isCustomPackage }
+            .map { it.packageName }
+            .toSet()
+
+        val packagesToFetch = customPackages.filter { it !in alreadyResolved }
+
         if (packagesToFetch.isEmpty()) {
             return
         }
         
-        // Fetch details for each custom package
-        val customApps = packagesToFetch.mapNotNull { packageName ->
+        // Fetch details for each custom package. Every entry must carry
+        // isCustomPackage = true, otherwise it is filtered off the custom tab and
+        // re-fetched on every load; and a lookup that yields nothing still gets a basic
+        // entry so the package the user added does not silently disappear.
+        val customApps = packagesToFetch.map { packageName ->
+            val fallback = AppMetadata(
+                packageName = packageName,
+                title = packageName,
+                versionName = "",
+                versionCode = 0,
+                isInstalled = false,
+                isCustomPackage = true
+            )
             try {
                 val appInfo = appStoreService.getCustomPackageDetails(packageName)
-                if (appInfo != null) {
-                    // Check source availability
-                    val sources = appStoreService.checkSourceAvailability(packageName)
-                    appInfo.copy(availableSources = sources)
-                } else null
+                val sources = appStoreService.checkSourceAvailability(packageName)
+                (appInfo ?: fallback).copy(availableSources = sources, isCustomPackage = true)
             } catch (e: Exception) {
                 AppLogger.e(TAG, "Failed to get custom package details for $packageName", e)
-                // Add basic entry anyway
-                AppMetadata(
-                    packageName = packageName,
-                    title = packageName,
-                    versionName = "",
-                    versionCode = 0,
-                    isInstalled = false,
-                    isCustomPackage = true
-                )
+                fallback
             }
         }
         
@@ -404,6 +414,9 @@ class AstoreViewModel @Inject constructor(
                 updateAppProgress(packageName, 0, false)
                 _uiState.update { it.copy(error = context.getString(R.string.astore_error_update_failed, e.localizedMessage)) }
             } finally {
+                // Never leave a row spinning: if the flow ends without a terminal event
+                // the progress state would otherwise stay stuck on "downloading".
+                updateAppProgress(packageName, 0, false)
                 activeInstalls.remove(packageName)
             }
         }

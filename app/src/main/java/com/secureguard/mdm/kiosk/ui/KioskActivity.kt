@@ -62,9 +62,15 @@ class KioskActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
-            val kioskEnabled = settingsRepository.isKioskModeEnabled()
-            val chosenLauncher = settingsRepository.getChosenHomeLauncherPackage()
-            val dontShowAgain = settingsRepository.shouldNotShowHomeChoiceAgain()
+            // A failure reading settings used to abort before setContent ran, leaving the
+            // launcher-replacing activity blank and the device effectively unlocked.
+            // Fail closed instead: assume the kiosk is on and still draw it.
+            val kioskEnabled = runCatching { settingsRepository.isKioskModeEnabled() }.getOrElse { e ->
+                Log.e("KioskActivity", "Failed to read kiosk state; assuming enabled.", e)
+                true
+            }
+            val chosenLauncher = runCatching { settingsRepository.getChosenHomeLauncherPackage() }.getOrNull()
+            val dontShowAgain = runCatching { settingsRepository.shouldNotShowHomeChoiceAgain() }.getOrDefault(false)
 
             // הפעל משימות BOOT רק אם הן עוד לא הופעלו בתהליך זה (קורה בדרך כלל בשיגור כ-Launcher)
             if (isLaunchedAsHome) {
@@ -107,8 +113,8 @@ class KioskActivity : ComponentActivity() {
             }
 
             // הצג את מסך הקיוסק
-            val isSingleEnabled = settingsRepository.isSingleWebsiteKioskEnabled()
-            val singleUrl = settingsRepository.getSingleWebsiteKioskUrl()
+            val isSingleEnabled = runCatching { settingsRepository.isSingleWebsiteKioskEnabled() }.getOrDefault(false)
+            val singleUrl = runCatching { settingsRepository.getSingleWebsiteKioskUrl() }.getOrDefault("")
 
             setContent {
                 SecureGuardTheme {
@@ -164,6 +170,19 @@ class KioskActivity : ComponentActivity() {
                 return@launch
             }
 
+            // If we are not on the lock-task allowlist there is nothing to fall back on
+            // and the device sits on the kiosk screen completely unlocked. That happens
+            // whenever the allowlist was lost (a reboot before it was re-applied, or an
+            // owner change), so re-apply it and try once more instead of giving up.
+            if (!kioskLockManager.isLockTaskPermitted()) {
+                Log.w("KioskActivity", "Lock task not permitted; re-applying lock task packages.")
+                try {
+                    kioskLockManager.setLockTaskPackages()
+                } catch (e: Exception) {
+                    Log.e("KioskActivity", "Failed to re-apply lock task packages", e)
+                }
+            }
+
             if (kioskLockManager.isLockTaskPermitted()) {
                 // בדוק אם אנחנו כבר ב-Lock Task
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
@@ -171,10 +190,12 @@ class KioskActivity : ComponentActivity() {
                         try {
                             startLockTask()
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.e("KioskActivity", "startLockTask failed", e)
                         }
                     }
                 }
+            } else {
+                Log.e("KioskActivity", "Kiosk is enabled but lock task is still not permitted.")
             }
         }
     }

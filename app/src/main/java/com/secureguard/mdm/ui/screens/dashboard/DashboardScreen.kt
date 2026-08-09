@@ -115,7 +115,13 @@ fun DashboardScreen(
             if (uiState.isSettingsButtonVisible) {
                 Button(
                     onClick = { viewModel.onEvent(DashboardEvent.OnSettingsClicked) },
-                    modifier = Modifier.fillMaxWidth().padding(16.dp)
+                    // targetSdk 35+ forces edge-to-edge, so the window no longer insets
+                    // itself for the system bars. Without this the button is drawn
+                    // underneath the navigation buttons and cannot be tapped.
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(16.dp)
                 ) {
                     Text(stringResource(id = R.string.dashboard_button_settings))
                 }

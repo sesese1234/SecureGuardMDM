@@ -98,9 +98,21 @@ fun SettingsScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.triggerUninstallEvent.collectLatest { 
-            val intent = Intent(Intent.ACTION_DELETE, Uri.parse("package:${context.packageName}"))
-            context.startActivity(intent)
+        viewModel.triggerUninstallEvent.collectLatest {
+            val packageUri = Uri.parse("package:${context.packageName}")
+            val intent = Intent(Intent.ACTION_UNINSTALL_PACKAGE, packageUri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                // Some OEM builds do not expose ACTION_UNINSTALL_PACKAGE to third parties.
+                context.startActivity(
+                    Intent(Intent.ACTION_DELETE, packageUri).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+            }
         }
     }
 

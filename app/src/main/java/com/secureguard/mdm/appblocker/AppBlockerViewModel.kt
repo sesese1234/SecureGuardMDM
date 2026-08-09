@@ -70,6 +70,7 @@ class AppBlockerViewModel @Inject constructor(
             is AppBlockerEvent.OnFilterChanged -> onFilterChanged(event.newFilter)
             is AppBlockerEvent.OnAppSelectionChanged -> onAppSelectionChanged(event.packageName, event.isBlocked)
             is AppBlockerEvent.OnAppSuspensionChanged -> onAppSuspensionChanged(event.packageName, event.isSuspended)
+            is AppBlockerEvent.OnAppDeselected -> onAppDeselected(event.packageName)
             is AppBlockerEvent.OnSaveRequest -> saveAndApplyChanges() // קריאה ישירה
             is AppBlockerEvent.OnUnblockSelectedRequest -> unblockSelectedApps() // קריאה ישירה
             is AppBlockerEvent.OnUnsuspendSelectedRequest -> unsuspendSelectedApps() // קריאה ישירה
@@ -83,8 +84,15 @@ class AppBlockerViewModel @Inject constructor(
     }
 
     fun loadAllData() {
+        // A refresh must not clear the search box or swap the list out for a spinner:
+        // both rebuild the LazyColumn from scratch and throw the user back to the top
+        // of a list that can be hundreds of apps long.
+        refreshData(showSpinner = _uiState.value.displayedAppsForSelection.isEmpty())
+    }
+
+    private fun refreshData(showSpinner: Boolean) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, searchQuery = "") }
+            if (showSpinner) _uiState.update { it.copy(isLoading = true) }
             allAppsMasterList = getInstalledApps()
             allBlockedAppsMasterList = getBlockedAppsFromCache()
             allSuspendedAppsMasterList = getSuspendedAppsFromCache()
@@ -240,6 +248,13 @@ class AppBlockerViewModel @Inject constructor(
         applyFilter()
     }
 
+    private fun onAppDeselected(packageName: String) {
+        allAppsMasterList = allAppsMasterList.map {
+            if (it.packageName == packageName) it.copy(isBlocked = false, isSuspended = false) else it
+        }
+        applyFilter()
+    }
+
     private fun onAppSuspensionChanged(packageName: String, isSuspended: Boolean) {
         if (isSuspended && CRITICAL_SYSTEM_PACKAGES.contains(packageName)) {
             val criticalAppInfos = allAppsMasterList.filter { it.packageName == packageName }
@@ -256,24 +271,31 @@ class AppBlockerViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val oldBlockedSet = settingsRepository.getBlockedAppPackages()
             val oldSuspendedSet = settingsRepository.getSuspendedAppPackages()
-            val newlySelectedApps = allAppsMasterList.filter { it.isBlocked }.map { it.packageName }.toSet()
-            val newlySuspendedApps = allAppsMasterList.filter { it.isSuspended }.map { it.packageName }.toSet()
-            val finalBlockedSet = oldBlockedSet + newlySelectedApps
 
-            val finalSuspendedSet = (oldSuspendedSet + newlySuspendedApps) - finalBlockedSet
+            // The master list is the source of truth for every package it covers, so
+            // clearing a checkbox actually removes the app. Packages the list does not
+            // cover (e.g. a blocked app that has since been uninstalled) are carried
+            // over untouched instead of being silently dropped.
+            val knownPackages = allAppsMasterList.map { it.packageName }.toSet()
+            val selectedBlocked = allAppsMasterList.filter { it.isBlocked }.map { it.packageName }.toSet()
+            val selectedSuspended = allAppsMasterList.filter { it.isSuspended }.map { it.packageName }.toSet()
 
-            val combinedSet = finalBlockedSet + finalSuspendedSet
-            if (combinedSet.contains(OWN_PACKAGE)) {
-                Log.w(TAG, "Skipping own package from block/suspend lists")
-            }
+            val finalBlockedSet = ((oldBlockedSet - knownPackages) + selectedBlocked) - OWN_PACKAGE
+            val finalSuspendedSet =
+                ((((oldSuspendedSet - knownPackages) + selectedSuspended) - finalBlockedSet)) - OWN_PACKAGE
 
             if (finalBlockedSet == oldBlockedSet && finalSuspendedSet == oldSuspendedSet) {
                 Log.d(TAG, "No changes to save.")
                 return@launch
             }
 
+            val blockedToAdd = finalBlockedSet - oldBlockedSet
+            val blockedToRemove = oldBlockedSet - finalBlockedSet
+            val suspendedToAdd = finalSuspendedSet - oldSuspendedSet
+            val suspendedToRemove = oldSuspendedSet - finalSuspendedSet
+
             // Check for critical system apps (block/suspend)
-            val criticalApps = (newlySelectedApps + newlySuspendedApps).filter { CRITICAL_SYSTEM_PACKAGES.contains(it) }
+            val criticalApps = (blockedToAdd + suspendedToAdd).filter { CRITICAL_SYSTEM_PACKAGES.contains(it) }
             if (criticalApps.isNotEmpty()) {
                 val criticalAppInfos = allAppsMasterList.filter { criticalApps.contains(it.packageName) }
                 withContext(Dispatchers.Main) {
@@ -282,25 +304,33 @@ class AppBlockerViewModel @Inject constructor(
                 return@launch
             }
 
-            settingsRepository.setBlockedAppPackages(finalBlockedSet - OWN_PACKAGE)
-            settingsRepository.setSuspendedAppPackages(finalSuspendedSet - OWN_PACKAGE)
+            settingsRepository.setBlockedAppPackages(finalBlockedSet)
+            settingsRepository.setSuspendedAppPackages(finalSuspendedSet)
 
-            val appsToCache = allAppsMasterList.filter {
-                combinedSet.contains(it.packageName) && !oldBlockedSet.contains(it.packageName) && !oldSuspendedSet.contains(it.packageName)
-            }
-            appsToCache.forEach { cacheAppInfo(it) }
+            // Only evict apps that are no longer protected at all — an app moving from
+            // suspended to blocked appears in both "removed" and "added" sets and must
+            // keep its cached name and icon.
+            val noLongerProtected =
+                (blockedToRemove + suspendedToRemove) - finalBlockedSet - finalSuspendedSet
+            removeAppsFromCache(noLongerProtected.toList())
 
-            val packagesToUnsuspend = oldSuspendedSet - finalSuspendedSet
-            packagesToUnsuspend.forEach { packageName ->
+            val newlyProtected = blockedToAdd + suspendedToAdd
+            allAppsMasterList.filter { newlyProtected.contains(it.packageName) }.forEach { cacheAppInfo(it) }
+
+            blockedToRemove.forEach { packageName ->
                 try {
-                    dpm.setPackagesSuspended(adminComponentName, arrayOf(packageName), false)
-                    Log.d(TAG, "Set suspended state for $packageName to false (auto)")
+                    dpm.setApplicationHidden(adminComponentName, packageName, false)
+                    Log.d(TAG, "Set hidden state for $packageName to false (deselected)")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Could not unsuspend $packageName", e)
+                    Log.w(TAG, "Could not unhide $packageName", e)
                 }
             }
 
-            newlySelectedApps.forEach { packageName ->
+            suspendedToRemove.forEach { packageName ->
+                setPackagesSuspendedSafely(packageName, false)
+            }
+
+            blockedToAdd.forEach { packageName ->
                 try {
                     dpm.setApplicationHidden(adminComponentName, packageName, true)
                     Log.d(TAG, "Set hidden state for $packageName to true")
@@ -309,16 +339,25 @@ class AppBlockerViewModel @Inject constructor(
                 }
             }
 
-            newlySuspendedApps.forEach { packageName ->
-                try {
-                    dpm.setPackagesSuspended(adminComponentName, arrayOf(packageName), true)
-                    Log.d(TAG, "Set suspended state for $packageName to true")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not change suspended state for $packageName", e)
-                }
+            suspendedToAdd.forEach { packageName ->
+                setPackagesSuspendedSafely(packageName, true)
             }
 
-            withContext(Dispatchers.Main) { loadAllData() }
+            withContext(Dispatchers.Main) { refreshData(showSpinner = false) }
+        }
+    }
+
+    /**
+     * setPackagesSuspended is API 24+; minSdk is 22, and a missing method raises
+     * NoSuchMethodError rather than an Exception, so the version has to be checked.
+     */
+    private fun setPackagesSuspendedSafely(packageName: String, suspended: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        try {
+            dpm.setPackagesSuspended(adminComponentName, arrayOf(packageName), suspended)
+            Log.d(TAG, "Set suspended state for $packageName to $suspended")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not change suspended state for $packageName", e)
         }
     }
 

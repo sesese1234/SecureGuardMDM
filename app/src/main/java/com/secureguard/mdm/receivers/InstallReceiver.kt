@@ -14,8 +14,32 @@ class InstallReceiver : BroadcastReceiver() {
     @RequiresApi(Build.VERSION_CODES.M)
     override fun onReceive(context: Context, intent: Intent) {
         val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)
+
+        // The installer asks for confirmation instead of installing whenever the session
+        // could not run unattended. This was previously treated as a plain failure, so
+        // the install was simply dropped and the user only saw an error.
+        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            val confirmationIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+            }
+            if (confirmationIntent != null) {
+                confirmationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    context.startActivity(confirmationIntent)
+                } catch (e: Exception) {
+                    Toast.makeText(context, context.getString(R.string.update_toast_failed), Toast.LENGTH_LONG).show()
+                }
+            }
+            return
+        }
+
         if (status == PackageInstaller.STATUS_SUCCESS) {
-            val installedPackageName = intent.getStringExtra("package_name")
+            // The framework reports the package under EXTRA_PACKAGE_NAME; the old
+            // "package_name" key was always absent, so this never matched.
+            val installedPackageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
 
             // אם החבילה שהותקנה היא NoPhone, הקפץ בקשה להגדיר כברירת מחדל
             if (installedPackageName == "org.fossify.phone") {

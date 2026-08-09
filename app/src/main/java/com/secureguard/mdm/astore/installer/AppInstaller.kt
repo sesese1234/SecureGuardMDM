@@ -77,6 +77,11 @@ class AppInstaller @Inject constructor(
             
             // Create installation session
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            // As device owner we can install unattended; without this Android 12+ replies
+            // with STATUS_PENDING_USER_ACTION rather than performing the install.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
             params.setAppPackageName(packageName)
             
             val sessionId = packageInstaller.createSession(params)
@@ -90,15 +95,19 @@ class AppInstaller @Inject constructor(
                 }
             }
             
-            // Commit session
+            // Commit session.
+            // FLAG_UPDATE_CURRENT must be kept on API 31+ as well, and the session id is
+            // used as the request code: with a fixed code of 0 every install reused the
+            // first PendingIntent, so status callbacks were delivered against a stale
+            // intent and concurrent installs clobbered each other.
             val intent = Intent(context, InstallReceiver::class.java)
-            val flags = if (Build.VERSION.SDK_INT >= 31) {
-                33554432 // FLAG_MUTABLE
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             } else {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
-            
-            val pendingIntent = PendingIntent.getBroadcast(context, 0, intent, flags)
+
+            val pendingIntent = PendingIntent.getBroadcast(context, sessionId, intent, flags)
             session.commit(pendingIntent.intentSender)
             session.close()
             session = null
@@ -164,6 +173,11 @@ class AppInstaller @Inject constructor(
             
             // Create installation session
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            // As device owner we can install unattended; without this Android 12+ replies
+            // with STATUS_PENDING_USER_ACTION rather than performing the install.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
             params.setAppPackageName(packageName)
             
             val sessionId = packageInstaller.createSession(params)
@@ -200,15 +214,19 @@ class AppInstaller @Inject constructor(
                 return@withContext InstallResult.Failure("No APK files found in archive")
             }
             
-            // Commit session
+            // Commit session.
+            // FLAG_UPDATE_CURRENT must be kept on API 31+ as well, and the session id is
+            // used as the request code: with a fixed code of 0 every install reused the
+            // first PendingIntent, so status callbacks were delivered against a stale
+            // intent and concurrent installs clobbered each other.
             val intent = Intent(context, InstallReceiver::class.java)
-            val flags = if (Build.VERSION.SDK_INT >= 31) {
-                33554432 // FLAG_MUTABLE
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
             } else {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
-            
-            val pendingIntent = PendingIntent.getBroadcast(context, 0, intent, flags)
+
+            val pendingIntent = PendingIntent.getBroadcast(context, sessionId, intent, flags)
             session.commit(pendingIntent.intentSender)
             session.close()
             session = null
