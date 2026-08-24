@@ -1,11 +1,11 @@
-# A Bloq (SecureGuard MDM) - Version 0.5.0
+#  The Android Key (Abloq MDM & SecureGuard MDM) - Version 0.5.0
 
 # 4,053 Downloads 
 (updated every two weeks)
 
 A Bloq is an Android Mobile Device Management (MDM) client that enforces system policies, restricts application usage, runs a lockdown kiosk mode, and manages network security filters.
 
-Originally named SecureGuard MDM, the project was rebranded to A Bloq in version 0.4.2.
+Originally named Abloq MDM, the project was rebranded to The Android Key in version 0.4.2.
 
 GitHub Repository: https://github.com/sesese1234/SecureGuardMDM
 Website: https://cfopuser.github.io/A-bloq-site/
