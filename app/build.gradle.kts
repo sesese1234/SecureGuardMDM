@@ -122,6 +122,10 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+
+    // WorkManager (ScreenTime)
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
     // date for kiosk
     implementation("com.kosherjava:zmanim:2.5.0")
 }
