@@ -20,3 +20,11 @@ object NavigateToBlockedAppsSetting : NavigationalSetting {
     override val category: SettingCategory = SettingCategory.APP_MANAGEMENT
     override val route: String = Routes.BLOCKED_APPS_DISPLAY
 }
+
+object NavigateToScreenTimeSetting : NavigationalSetting {
+    override val id: String = "navigate_screen_time"
+    override val titleRes: Int = R.string.settings_item_screen_time
+    override val iconRes: Int = R.drawable.ic_screen_time
+    override val category: SettingCategory = SettingCategory.APP_MANAGEMENT
+    override val route: String = Routes.SCREEN_TIME_SETTINGS
+}

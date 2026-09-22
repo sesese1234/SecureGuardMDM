@@ -138,6 +138,10 @@
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <service
+            android:name=".services.ScreenTimeEnforcerJob"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <service
             android:name=".MainService"
             android:exported="false"
             android:foregroundServiceType="specialUse"

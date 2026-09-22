@@ -55,6 +55,20 @@
     <string name="settings_item_view_blocked_apps">View Blocked Apps</string>
     <string name="settings_item_change_default_dialer">Change Default Phone App</string>
     <string name="settings_item_auto_update_check">Check for Updates Automatically on Launch</string>
+    <string name="settings_item_screen_time">Screen Time Limit</string>
+
+    <!-- Screen Time Limit -->
+    <string name="screen_time_title">Screen Time Limit</string>
+    <string name="screen_time_enable_toggle">Enable Screen Time Limit</string>
+    <string name="screen_time_daily_limit_label">Daily minute limit per app</string>
+    <string name="screen_time_allowed_hours_label">Allowed usage hours</string>
+    <string name="screen_time_allowed_hours_from">From hour</string>
+    <string name="screen_time_allowed_hours_to">To hour</string>
+    <string name="screen_time_select_apps_label">Select apps to limit</string>
+    <string name="screen_time_search_apps_hint">Search app…</string>
+    <string name="screen_time_usage_access_warning">"Usage Access" permission is required for this limit to work</string>
+    <string name="screen_time_usage_access_button">Open permission settings</string>
+    <string name="screen_time_minutes_suffix">minutes</string>
 
     <!-- Toasts for Call Blocker -->
     <string name="toast_hiding_dialer">Hiding original phone app (%s)...</string>

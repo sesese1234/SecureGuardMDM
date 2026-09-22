@@ -1,6 +1,7 @@
 package com.secureguard.mdm.data.repository
 
 import com.secureguard.mdm.data.db.BlockedAppCache
+import com.secureguard.mdm.screentime.ScreenTimeProfile
 import kotlinx.coroutines.flow.Flow
 
 interface SettingsRepository {
@@ -80,6 +81,24 @@ interface SettingsRepository {
 
     suspend fun isKioskAppMonitorEnabled(): Boolean
     suspend fun setKioskAppMonitorEnabled(isEnabled: Boolean)
+
+    // --- Screen Time Limit Settings ---
+    suspend fun isScreenTimeEnabled(): Boolean
+    suspend fun setScreenTimeEnabled(isEnabled: Boolean)
+    suspend fun getScreenTimeAppPackages(): Set<String>
+    suspend fun setScreenTimeAppPackages(packageNames: Set<String>)
+    suspend fun getScreenTimeDailyLimitMinutes(): Int
+    suspend fun setScreenTimeDailyLimitMinutes(minutes: Int)
+    suspend fun getScreenTimeAllowedStartHour(): Int
+    suspend fun getScreenTimeAllowedEndHour(): Int
+    suspend fun setScreenTimeAllowedHours(startHour: Int, endHour: Int)
+    suspend fun getScreenTimeSuspendedPackages(): Set<String>
+    suspend fun setScreenTimeSuspendedPackages(packageNames: Set<String>)
++    // Multi-profile ScreenTime support
++    suspend fun getScreenTimeProfiles(): List<ScreenTimeProfile>
++    suspend fun setScreenTimeProfiles(profiles: List<ScreenTimeProfile>)
++    fun getScreenTimeProfilesFlow(): Flow<List<ScreenTimeProfile>>
+    fun getScreenTimeEnabledFlow(): Flow<Boolean>
 
     // --- הוספת זרמים (Flows) לעדכון חי ---
     fun getKioskEnabledFlow(): Flow<Boolean>
